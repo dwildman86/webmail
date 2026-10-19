@@ -215,7 +215,7 @@ if ($step === 'mailboxes') {
     if ($post) {
         $chosen = array_values(array_intersect(array_column($addresses, 'address'), (array) ($_POST['addresses'] ?? [])));
         $config = [
-            'app_name' => $s['admin']['app_name'], 'base_url' => $s['admin']['base_url'], 'key' => base64_encode(Crypto::newKey()),
+            'app_name' => $s['admin']['app_name'], 'base_url' => $s['admin']['base_url'], 'key' => $s['key'] ??= base64_encode(Crypto::newKey()),
             'db' => $s['db'], 'ghostparse' => $s['gp'], 'installed_at' => gmdate('c'), 'version' => App::VERSION,
         ];
         try {
@@ -230,6 +230,17 @@ if ($step === 'mailboxes') {
                 $connected[] = $address;
             }
         } catch (\Throwable $ex) {
+            // Start clean next time: the database step only accepted a database without these tables.
+            if (isset($app)) {
+                try {
+                    $app->db->run('SET FOREIGN_KEY_CHECKS = 0');
+                    foreach (Schema::tables() as $t) {
+                        $app->db->run("DROP TABLE IF EXISTS {{$t}}");
+                    }
+                    $app->db->run('SET FOREIGN_KEY_CHECKS = 1');
+                } catch (\Throwable) {
+                }
+            }
             page('Mailboxes', '<h1>Install failed</h1><div class="notice bad">' . $e($ex->getMessage()) . '</div><a class="btn" href="install.php?step=mailboxes">Back</a>', 4);
         }
         $source = Config::render($config);
@@ -248,9 +259,10 @@ if ($step === 'mailboxes') {
     }
     $rows = '';
     foreach ($addresses as $a) {
-        $note = $a['note'] ? ' <span class="muted">(' . $e($a['note']) . ')</span>' : '';
-        $replace = $a['webhook'] ? ' <span class="muted">its webhook ' . $e($a['webhook']) . ' will be replaced</span>' : '';
-        $rows .= '<label class="check"><input type="checkbox" name="addresses[]" value="' . $e($a['address']) . '" checked> ' . $e($a['address']) . $note . $replace . '</label>';
+        $notes = array_filter([$a['note'] ? ucfirst($a['note']) . '.' : '',
+            $a['webhook'] && $a['webhook'] !== $s['admin']['base_url'] . '/webhook.php' ? 'Its email goes to ' . $a['webhook'] . ' now; that stops.' : '']);
+        $rows .= '<label class="check address"><input type="checkbox" name="addresses[]" value="' . $e($a['address']) . '" checked><span>' . $e($a['address'])
+            . ($notes ? '<small class="muted">' . $e(implode(' ', $notes)) . '</small>' : '') . '</span></label>';
     }
     page('Mailboxes', '<h1>Your mailboxes</h1><p>Choose the GhostParse addresses to read and send from here. Each one\'s webhook is pointed at this webmail.</p>'
         . '<form method="post">' . $csrf . ($rows ?: '<p class="muted">Your account has no addresses yet: add them in GhostParse under Domains, or later here.</p>')

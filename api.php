@@ -37,12 +37,13 @@ try {
         Http::json(['ok' => true, 'csrf' => Auth::csrfToken()]);
     }
     if ($action === 'session') {
+        \Webmail\Schema::upgrade($app->db); // after uploading a new version
         $user = $auth->user();
         if (!$user) {
-            Http::json(['user' => null, 'app' => ['name' => $app->config->get('app_name', 'Webmail')]], 401);
+            Http::json(['user' => null, 'app' => ['name' => $app->config->get('app_name', 'Webmail'), 'passkeys' => (int) $app->db->value('SELECT COUNT(*) FROM {passkeys}') > 0]], 401);
         }
         Http::json(['user' => $user, 'csrf' => Auth::csrfToken(), 'mailboxes' => $store->mailboxesFor($user['id']),
-            'app' => ['name' => $app->config->get('app_name', 'Webmail'), 'version' => App::VERSION, 'vapid_public_key' => $app->config->get('vapid')['public'] ?? null]]);
+            'app' => ['name' => $app->config->get('app_name', 'Webmail'), 'version' => App::VERSION, 'vapid_public_key' => \Webmail\Notifier::supported() ? (new \Webmail\Notifier($app))->vapid()['public'] : null]]);
     }
     if (class_exists(\Webmail\Passkeys::class) && str_starts_with($action, 'passkey/login')) {
         (new \Webmail\Passkeys($app))->route($action, $method, null);
@@ -62,6 +63,29 @@ try {
                 (string) ($_GET['q'] ?? ''), ($_GET['starred'] ?? '') === '1'));
         case 'GET message':
             Http::json($store->get($user['id'], $int('id'), ($_GET['peek'] ?? '') !== '1'));
+        case 'GET body':
+            // The message as its own document, shown in a sandboxed frame: no scripts, no forms, and remote images
+            // only when asked for (they can tell the sender you opened it).
+            $m = $store->get($user['id'], $int('id'), false)['message'];
+            $images = ($_GET['images'] ?? '') === '1';
+            header('Content-Type: text/html; charset=utf-8');
+            header('Cache-Control: private, no-store');
+            header('X-Content-Type-Options: nosniff');
+            header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:" . ($images ? ' https: http:' : '')
+                . "; sandbox allow-popups allow-popups-to-escape-sandbox; frame-ancestors 'self'");
+            $esc = fn ($t) => htmlspecialchars((string) $t, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $style = '<style>html{color-scheme:light}body{margin:0;padding:16px 20px;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1d2330;background:#fff;word-wrap:break-word}'
+                . 'img{max-width:100%;height:auto}pre{white-space:pre-wrap;font:inherit;margin:0}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:3px solid #d6dbe4;color:#5b6475}a{color:#2563eb}</style>';
+            if ($m['html']) {
+                $html = preg_replace('#<script\b[^>]*>.*?</script>#is', '', (string) $m['html']);
+                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body>' . $html . '</body></html>';
+            } else {
+                $text = $esc($m['text']);
+                $text = preg_replace('#(https?://[^\s<>"]+)#', '<a href="$1" rel="noopener noreferrer">$1</a>', $text);
+                $text = preg_replace('/^(&gt;.*)$/m', '<span style="color:#5b6475">$1</span>', $text);
+                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body><pre>' . $text . '</pre></body></html>';
+            }
+            exit;
         case 'POST messages/update':
             $in = Http::body();
             Http::json(['updated' => $store->update($user['id'], (array) ($in['ids'] ?? []), array_intersect_key($in, array_flip(['read', 'starred', 'folder'])))]);

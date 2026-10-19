@@ -1,0 +1,39 @@
+# Keep the code, settings and data private (Apache and LiteSpeed). On nginx, see README.md.
+Options -Indexes
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(app|storage|tests|vendor)(/|$) - [F,L]
+  RewriteRule ^(config\.php|config\.php\.tmp|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ - [F,L]
+</IfModule>
+<IfModule !mod_rewrite.c>
+  <FilesMatch "^(config\.php|config\.php\.tmp|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$">
+    <IfModule mod_authz_core.c>
+      Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+      Order deny,allow
+      Deny from all
+    </IfModule>
+  </FilesMatch>
+</IfModule>
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "no-referrer"
+</IfModule>
+# The same limits as .user.ini, where PHP runs as an Apache module.
+<IfModule mod_php.c>
+  php_value post_max_size 48M
+  php_value upload_max_filesize 32M
+  php_value memory_limit 256M
+</IfModule>
+<IfModule mod_php7.c>
+  php_value post_max_size 48M
+  php_value upload_max_filesize 32M
+  php_value memory_limit 256M
+</IfModule>
+# The service worker and the app shell are checked for updates every visit.
+<IfModule mod_headers.c>
+  <FilesMatch "^(sw\.js|manifest\.php)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

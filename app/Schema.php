@@ -10,6 +10,12 @@ namespace Webmail;
 final class Schema
 {
     /** @return array<int, string[]> */
+    /** Every table the webmail makes (without the prefix). */
+    public static function tables(): array
+    {
+        return ['passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+    }
+
     public static function migrations(): array
     {
         return [
@@ -135,6 +141,15 @@ final class Schema
     }
 
     /** Run the migrations the database hasn't had yet. Returns the new version. */
+    /** Apply any changes a newer version brings: one quick check when the webmail is opened. */
+    public static function upgrade(Db $db): void
+    {
+        $latest = max(array_keys(self::migrations()));
+        if ((int) ($db->value("SELECT v FROM {meta} WHERE k = 'schema_version'") ?? 0) < $latest) {
+            self::migrate($db);
+        }
+    }
+
     public static function migrate(Db $db): int
     {
         $db->run("CREATE TABLE IF NOT EXISTS {meta} (k VARCHAR(64) PRIMARY KEY, v TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
