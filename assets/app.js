@@ -311,17 +311,24 @@ async function openMessage(id) {
 }
 const last = () => [...current.thread].reverse().find((t) => t.folder !== "sent") || current.thread[current.thread.length - 1];
 
+// Each message frame reports its height; only messages from our own frames (matched by window) are believed.
+const frames = new Map();
+window.addEventListener("message", (e) => {
+  const id = e.data?.webmailFrame;
+  const frame = frames.get(id);
+  if (!frame || e.source !== frame.contentWindow || typeof e.data.height !== "number") return;
+  frame.style.height = `${Math.min(Math.max(120, e.data.height), 20000)}px`;
+});
+
 function mailCard(t, open) {
-  const frame = h("iframe", { title: `Message from ${who(t.from)}`, sandbox: "allow-popups allow-popups-to-escape-sandbox", referrerpolicy: "no-referrer", loading: "lazy" });
+  // allow-scripts lets only the frame's own height reporter run (api.php gives it a nonce); without allow-same-origin
+  // the message can't reach this page.
+  const frame = h("iframe", { title: `Message from ${who(t.from)}`, sandbox: "allow-scripts allow-popups allow-popups-to-escape-sandbox", referrerpolicy: "no-referrer", loading: "lazy" });
+  frames.set(t.id, frame);
   const content = h("div", { class: "mail-content" });
   const hasRemote = /<img[^>]+src=["']?https?:/i.test(t.html || "");
   const load = (images) => {
     frame.src = `api.php?a=body&id=${t.id}${images ? "&images=1" : ""}`;
-    frame.onload = () => {
-      // Same-origin isn't allowed in the frame, so size it from the text length rather than reading its height.
-      const lines = ((t.html || "").replace(/<[^>]+>/g, " ").length / 90) + (t.text || "").split("\n").length;
-      frame.style.height = `${Math.min(Math.max(200, lines * 24 + 60), 2400)}px`;
-    };
   };
   const bar = hasRemote && h("div", { class: "images-bar" }, "Remote images are hidden, so the sender can't tell you've opened this.",
     h("button", { class: "btn btn-sm", onclick: (e) => { load(true); e.currentTarget.parentElement.remove(); } }, "Show images"));

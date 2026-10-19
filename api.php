@@ -71,19 +71,25 @@ try {
             header('Content-Type: text/html; charset=utf-8');
             header('Cache-Control: private, no-store');
             header('X-Content-Type-Options: nosniff');
-            header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:" . ($images ? ' https: http:' : '')
-                . "; sandbox allow-popups allow-popups-to-escape-sandbox; frame-ancestors 'self'");
+            // One script runs in the frame: ours, carrying this response's nonce, which tells the page how tall the
+            // message is. The email's own scripts and inline handlers have no nonce, so they never run.
+            $nonce = base64_encode(random_bytes(16));
+            header("Content-Security-Policy: default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline'; font-src data:; img-src data:" . ($images ? ' https: http:' : '')
+                . "; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; frame-ancestors 'self'");
             $esc = fn ($t) => htmlspecialchars((string) $t, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $sizer = '<script nonce="' . $nonce . '">(function(){var last=0;function report(){var h=Math.ceil(document.documentElement.scrollHeight);'
+                . 'if(h!==last){last=h;parent.postMessage({webmailFrame:' . $int('id') . ',height:h},"*");}}'
+                . 'addEventListener("load",report);if(window.ResizeObserver){new ResizeObserver(report).observe(document.documentElement);}report();})();</script>';
             $style = '<style>html{color-scheme:light}body{margin:0;padding:16px 20px;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1d2330;background:#fff;word-wrap:break-word}'
                 . 'img{max-width:100%;height:auto}pre{white-space:pre-wrap;font:inherit;margin:0}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:3px solid #d6dbe4;color:#5b6475}a{color:#2563eb}</style>';
             if ($m['html']) {
                 $html = preg_replace('#<script\b[^>]*>.*?</script>#is', '', (string) $m['html']);
-                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body>' . $html . '</body></html>';
+                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body>' . $html . $sizer . '</body></html>';
             } else {
                 $text = $esc($m['text']);
                 $text = preg_replace('#(https?://[^\s<>"]+)#', '<a href="$1" rel="noopener noreferrer">$1</a>', $text);
                 $text = preg_replace('/^(&gt;.*)$/m', '<span style="color:#5b6475">$1</span>', $text);
-                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body><pre>' . $text . '</pre></body></html>';
+                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body><pre>' . $text . '</pre>' . $sizer . '</body></html>';
             }
             exit;
         case 'POST messages/update':
