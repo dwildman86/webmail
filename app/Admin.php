@@ -27,6 +27,13 @@ final class Admin
                     $store->grant($id, (int) $mb);
                 }
                 Http::json(['id' => $id], 201);
+            case 'POST admin/users/mfa-reset':
+                $id = (int) ($in['id'] ?? 0);
+                if ($id === $me['id']) {
+                    throw new HttpError(422, "You can't reset your own two-step verification here. Change it under Sign-in & alerts.", 'self');
+                }
+                (new Mfa($this->app))->reset($id);
+                Http::json(['ok' => true]);
             case 'POST admin/users/update':
                 $this->updateUser($me, (int) ($in['id'] ?? 0), $in);
                 Http::json(['ok' => true]);
@@ -54,7 +61,8 @@ final class Admin
         foreach ($this->app->db->all('SELECT id, email_enc, name_enc, role, disabled, created_at, last_login_at FROM {users} ORDER BY id') as $r) {
             $out[] = ['id' => (int) $r['id'], 'email' => $c->decrypt($r['email_enc'], 'users.email'), 'name' => $c->decrypt($r['name_enc'], 'users.name') ?? '',
                 'role' => $r['role'], 'disabled' => (bool) $r['disabled'], 'created_at' => $r['created_at'], 'last_login_at' => $r['last_login_at'],
-                'mailbox_ids' => array_map('intval', array_column($this->app->db->all('SELECT mailbox_id FROM {user_mailboxes} WHERE user_id = ?', [$r['id']]), 'mailbox_id'))];
+                'mailbox_ids' => array_map('intval', array_column($this->app->db->all('SELECT mailbox_id FROM {user_mailboxes} WHERE user_id = ?', [$r['id']]), 'mailbox_id')),
+                'two_step' => (new Mfa($this->app))->configured((int) $r['id'])];
         }
         return $out;
     }
@@ -79,7 +87,8 @@ final class Admin
         }
         if (!empty($in['password'])) {
             Auth::checkPassword((string) $in['password']);
-            $db->run('UPDATE {users} SET password_hash = ? WHERE id = ?', [Auth::hash((string) $in['password']), $id]);
+            // A new password signs them out everywhere.
+            $db->run('UPDATE {users} SET password_hash = ?, session_version = session_version + 1 WHERE id = ?', [Auth::hash((string) $in['password']), $id]);
         }
         if (isset($in['mailbox_ids'])) {
             $db->run('DELETE FROM {user_mailboxes} WHERE user_id = ?', [$id]);
@@ -96,7 +105,11 @@ final class Admin
             throw new HttpError(422, 'Your current password is wrong', 'wrong_password');
         }
         Auth::checkPassword($new);
-        $this->app->db->run('UPDATE {users} SET password_hash = ? WHERE id = ?', [Auth::hash($new), $userId]);
+        // Signs out the person's other sessions; this one carries on.
+        $this->app->db->run('UPDATE {users} SET password_hash = ?, session_version = session_version + 1 WHERE id = ?', [Auth::hash($new), $userId]);
+        if (($_SESSION['uid'] ?? null) === $userId) {
+            $_SESSION['sv'] = (int) $this->app->db->value('SELECT session_version FROM {users} WHERE id = ?', [$userId]);
+        }
     }
 
     /** The account's addresses on GhostParse, with whether each is a mailbox here already. */

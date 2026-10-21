@@ -43,6 +43,7 @@ If the last step fails, the installer removes what it created, so you can fix th
 ### On your phone and computer
 
 - **Install as an app**: in Chrome or Edge, use *Install* in the address bar. On Android, choose *Add to Home screen*. On iPhone or iPad, tap *Share*, then *Add to Home Screen*.
+- **Two-step verification**: the first time you sign in, you set up an authenticator app (scan the QR code) or a passkey, and save your recovery codes. After that, each sign-in asks for a code from the app, or you use your passkey.
 - **Passkeys**: **Settings → Sign-in & alerts → Add a passkey**. After that, choose *Use a passkey* on the sign-in page to sign in with your face, fingerprint or device PIN. Your fingerprint or face never leaves the device. Passwords keep working too.
 - **Notifications**: **Settings → Sign-in & alerts → Turn on**, once on each device. You're told about new email in your inboxes, even when the webmail is closed. On iPhone and iPad, this works from the Home Screen app (iOS 16.4 or newer).
 - **Offline**: the app opens without a connection and shows the mail you've already opened on that device. Signing out clears it.
@@ -52,6 +53,7 @@ If the last step fails, the installer removes what it created, so you can fix th
 - **Encrypted at rest.** Senders, recipients, subjects, message bodies, attachments, names, email addresses, contacts, signatures, push subscriptions and passkeys are encrypted in the database with XChaCha20-Poly1305 (libsodium). Each value is bound to its column, so values can't be swapped between columns. Someone with a copy of the database sees only ciphertext.
 - **Encrypted search.** Searching uses keyed blind indexes (HMAC-SHA-256) of words, never the words themselves.
 - **The key lives in `config.php`**, outside the database. It's created at install, and its file permissions are set to 0640. Keep a backup of the file somewhere safe.
+- **Two-step verification is required for everyone.** After their password, people enter a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password and others) or use a passkey. Anyone without one, including existing users after an update, sets it up at their next sign-in, before they can see any mail. Each person gets ten one-time recovery codes for a lost phone. An administrator can reset someone's two-step verification under **Settings → Users**, which also signs them out everywhere. The authenticator secret is stored encrypted, and recovery codes only as keyed hashes.
 - **Passwords** are hashed with Argon2id. Sign-in attempts are limited per IP address and per account, and sessions use HttpOnly, SameSite cookies with CSRF tokens.
 - **Email is shown safely.** Each message is displayed in a sandboxed frame with no scripts, under a strict Content Security Policy. Remote images are blocked until you click *Show images*, so senders can't tell when you've opened a message. Attachments are always downloaded and never displayed in the page. Email that fails SPF, DKIM and DMARC is marked as an unverified sender.
 - **Only GhostParse can deliver mail here.** `webhook.php` accepts only events signed with your signing secret, sent within the last five minutes, and processes each one only once. Attachments sent separately are checked against the signed event.
@@ -85,6 +87,8 @@ automatically the next time anyone opens the webmail.
 - **"Not sent: …"** The message comes from GhostParse. Usually the address can't send yet: its domain still needs its SPF and DKIM records verified.
 - **Big attachments fail.** Raise `post_max_size`, `upload_max_filesize` and `memory_limit` with your host. You can also set the address in GhostParse to deliver attachments as separate parts, or through storage links.
 - **Locked out.** An administrator can set a new password under **Settings → Users**.
+- **Lost phone.** Sign in with one of your recovery codes, then set up your authenticator app again under **Settings → Sign-in & alerts**. No recovery codes left? An administrator can reset your two-step verification under **Settings → Users**.
+- **"That code didn't work".** Authenticator codes depend on the time: make sure your phone sets its clock automatically.
 
 ## Development
 

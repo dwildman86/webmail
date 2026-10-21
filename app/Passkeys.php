@@ -56,6 +56,11 @@ final class Passkeys
             case 'POST passkey/register':
                 Http::json(['id' => $this->register($user['id'], $in)]);
             case 'POST passkey/delete':
+                // Two-step verification is required, so the last way to do it can't be removed.
+                $mfa = (new Mfa($this->app))->status($user['id']);
+                if (!$mfa['totp'] && $mfa['passkeys'] <= 1) {
+                    throw new HttpError(422, 'This is your only second step. Set up an authenticator app before removing it.', 'last_second_step');
+                }
                 $this->app->db->run('DELETE FROM {passkeys} WHERE id = ? AND user_id = ?', [(int) ($in['id'] ?? 0), $user['id']]);
                 Http::json(['ok' => true]);
         }

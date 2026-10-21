@@ -12,6 +12,7 @@ use Webmail\Config;
 use Webmail\Http;
 use Webmail\HttpError;
 use Webmail\Mailstore;
+use Webmail\Mfa;
 
 Http::securityHeaders();
 if (!Config::installed()) {
@@ -30,23 +31,64 @@ try {
     $store = new Mailstore($app);
     $int = fn (string $k) => (int) ($_GET[$k] ?? 0);
 
-    // Before sign-in.
+    \Webmail\Schema::upgrade($app->db); // after uploading a new version: one quick check
+    $mfa = new Mfa($app);
+
+    // Before sign-in. The password is the first step; the second (an authenticator code, a recovery code or a
+    // passkey) is required before anything else.
     if ($action === 'login' && $method === 'POST') {
         $in = Http::body();
         $auth->login((string) ($in['email'] ?? ''), (string) ($in['password'] ?? ''), Http::ip());
-        Http::json(['ok' => true, 'csrf' => Auth::csrfToken()]);
+        Http::json(['ok' => true, 'csrf' => Auth::csrfToken()] + secondStep($auth, $mfa));
     }
     if ($action === 'session') {
-        \Webmail\Schema::upgrade($app->db); // after uploading a new version
         $user = $auth->user();
         if (!$user) {
-            Http::json(['user' => null, 'app' => ['name' => $app->config->get('app_name', 'Webmail'), 'passkeys' => (int) $app->db->value('SELECT COUNT(*) FROM {passkeys}') > 0]], 401);
+            Http::json(['user' => null, 'csrf' => Auth::csrfToken(), 'app' => ['name' => $app->config->get('app_name', 'Webmail'),
+                'passkeys' => (int) $app->db->value('SELECT COUNT(*) FROM {passkeys}') > 0]] + secondStep($auth, $mfa), 401);
         }
         Http::json(['user' => $user, 'csrf' => Auth::csrfToken(), 'mailboxes' => $store->mailboxesFor($user['id']),
             'app' => ['name' => $app->config->get('app_name', 'Webmail'), 'version' => App::VERSION, 'vapid_public_key' => \Webmail\Notifier::supported() ? (new \Webmail\Notifier($app))->vapid()['public'] : null]]);
     }
     if (class_exists(\Webmail\Passkeys::class) && str_starts_with($action, 'passkey/login')) {
         (new \Webmail\Passkeys($app))->route($action, $method, null);
+    }
+    if ($action === 'logout' && $method === 'POST') {
+        $auth->logout();
+        Http::json(['ok' => true]);
+    }
+
+    // The second step, for a session that has only done its password.
+    $pending = $auth->user() ? null : $auth->pending();
+    if ($pending && ($action === 'mfa/verify' || str_starts_with($action, 'mfa/setup') || str_starts_with($action, 'passkey/register'))) {
+        if ($method !== 'GET') {
+            Auth::checkCsrf();
+        }
+        $in = $method === 'POST' ? Http::body() : [];
+        $done = function (array $codes) use ($auth, $pending) {
+            $auth->begin($pending['uid']);
+            Http::json(['ok' => true, 'csrf' => Auth::csrfToken(), 'recovery_codes' => $codes]);
+        };
+        if ($pending['stage'] === 'verify' && "$method $action" === 'POST mfa/verify') {
+            $mfa->verify($pending['uid'], (string) ($in['code'] ?? ''));
+            $done([]);
+        }
+        // Setting up a second step is only for someone who has none: anyone else has to use theirs first.
+        if ($pending['stage'] === 'enrol') {
+            $who = ['id' => $pending['uid'], 'email' => $pending['email'], 'name' => $pending['name']];
+            switch ("$method $action") {
+                case 'GET mfa/setup':
+                    Http::json($mfa->beginSetup($pending['email']));
+                case 'POST mfa/setup':
+                    $done($mfa->confirmSetup($pending['uid'], (string) ($in['code'] ?? '')));
+                case 'GET passkey/register/options':
+                    Http::json((new \Webmail\Passkeys($app))->registerOptions($who));
+                case 'POST passkey/register':
+                    (new \Webmail\Passkeys($app))->register($pending['uid'], $in);
+                    $done($mfa->newRecoveryCodes($pending['uid']));
+            }
+        }
+        throw new HttpError(403, 'Finish signing in first', 'second_step_required');
     }
 
     $user = $auth->requireUser();
@@ -55,9 +97,18 @@ try {
     }
 
     switch ("$method $action") {
-        case 'POST logout':
-            $auth->logout();
-            Http::json(['ok' => true]);
+        case 'GET mfa/status':
+            Http::json($mfa->status($user['id']));
+        // Changing the authenticator app or getting new recovery codes needs the password again.
+        case 'GET mfa/setup':
+            Http::json($mfa->beginSetup($user['email']));
+        case 'POST mfa/setup':
+            $in = Http::body();
+            $auth->confirmPassword($user['id'], (string) ($in['password'] ?? ''));
+            Http::json(['ok' => true, 'recovery_codes' => $mfa->confirmSetup($user['id'], (string) ($in['code'] ?? ''))]);
+        case 'POST mfa/recovery-codes':
+            $auth->confirmPassword($user['id'], (string) (Http::body()['password'] ?? ''));
+            Http::json(['recovery_codes' => $mfa->newRecoveryCodes($user['id'])]);
         case 'GET messages':
             Http::json($store->list($user['id'], $int('mailbox') ?: null, (string) ($_GET['folder'] ?? 'inbox'), max(1, $int('page')),
                 (string) ($_GET['q'] ?? ''), ($_GET['starred'] ?? '') === '1'));
@@ -146,4 +197,14 @@ try {
 } catch (\Throwable $e) {
     error_log('webmail api: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
     Http::json(['error' => 'server_error', 'message' => 'Something went wrong. The details are in the server log.'], 500);
+}
+
+/** What a session that has done its password still needs: ['mfa' => 'verify' | 'enrol', …], or nothing. */
+function secondStep(Auth $auth, Mfa $mfa): array
+{
+    $p = $auth->pending();
+    if (!$p) {
+        return [];
+    }
+    return ['mfa' => $p['stage'], 'methods' => $p['stage'] === 'verify' ? $mfa->status($p['uid']) : null];
 }

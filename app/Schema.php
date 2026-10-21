@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -129,6 +129,19 @@ final class Schema
                     name_enc TEXT NULL,
                     created_at DATETIME NOT NULL,
                     last_used_at DATETIME NULL,
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Two-step verification: an authenticator app (TOTP) and one-time recovery codes. session_version lets a
+            // reset or a password change sign the person out everywhere.
+            2 => [
+                "ALTER TABLE {users} ADD COLUMN totp_secret_enc TEXT NULL, ADD COLUMN totp_enabled_at DATETIME NULL,
+                    ADD COLUMN totp_last_step BIGINT NULL, ADD COLUMN session_version INT UNSIGNED NOT NULL DEFAULT 0",
+                "CREATE TABLE IF NOT EXISTS {mfa_recovery_codes} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT UNSIGNED NOT NULL,
+                    code_bidx BINARY(16) NOT NULL UNIQUE,
+                    created_at DATETIME NOT NULL,
                     FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],

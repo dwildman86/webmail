@@ -232,3 +232,20 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
 .check.address { align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .check.address input { margin-top: 4px; }
 .check.address span { display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+
+/* Two-step verification */
+.linkish { margin-top: 14px; background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; text-decoration: underline; }
+.code-input { height: 48px; font: 600 22px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .18em; text-align: center; }
+.totp-steps { padding-left: 1.2rem; margin: 0 0 14px; display: grid; gap: 14px; }
+.totp-steps li { padding-left: 4px; }
+.totp-steps li > * { display: block; margin-top: 8px; }
+.qr { width: 196px; height: 196px; border-radius: 10px; border: 1px solid var(--line); background: #fff; image-rendering: pixelated; }
+.secret { font: 600 14px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); user-select: all; overflow-wrap: anywhere; }
+.codes-box { margin: 6px 0 16px; }
+.codes { list-style: none; padding: 14px; margin: 0 0 10px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 16px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; }
+.codes code { font: 600 15px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; }
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 16px 0 10px; }
+.or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.or + .btn { width: 100%; height: 42px; }
+.totp-steps { list-style: decimal; }
+.totp-steps .code-input { width: 100%; }

@@ -119,7 +119,7 @@ function showLogin(message) {
     try {
       const r = await api("login", { method: "POST", body: { email: email.value, password: password.value } });
       csrf = r.csrf;
-      await start();
+      if (r.mfa) showSecondStep(r); else await start();
     } catch (err) {
       error.textContent = err.message;
       submit.disabled = false;
@@ -146,9 +146,110 @@ async function start() {
     await loadList();
     window.Notifications?.afterSignIn?.(s);
   } catch (err) {
-    if (err.status === 401) showLogin();
+    if (err.status === 401 && err.data?.mfa) { csrf = err.data.csrf || csrf; showSecondStep(err.data); }
+    else if (err.status === 401) showLogin();
     else $app.replaceChildren(h("div", { class: "auth-wrap" }, h("div", { class: "notice bad" }, err.message)));
   }
+}
+
+// ------------------------------------------------------------------------------------------------ two-step verification
+// Required for everyone: after the password, a code from an authenticator app (or a recovery code, or a passkey).
+// Someone without one sets it up here before they can see any mail.
+function authCard(title, intro, ...body) {
+  $app.replaceChildren(h("main", { class: "auth-wrap" },
+    h("div", { class: "brand" }, h("span", { class: "logo", "aria-hidden": "true" }), APP_NAME),
+    h("section", { class: "card" }, h("h1", {}, title), h("p", {}, intro), ...body),
+    h("button", { class: "linkish", onclick: signOut }, "Sign out")));
+}
+
+const codeInput = (extra = {}) => h("input", { name: "code", required: true, inputmode: "numeric", autocomplete: "one-time-code", maxlength: 12,
+  spellcheck: false, autocapitalize: "off", class: "input code-input", placeholder: "123456", ...extra });
+
+async function showSecondStep(data) {
+  if (data.mfa === "enrol") return showEnrol();
+  const error = h("div", { class: "error", role: "alert" });
+  const code = codeInput();
+  const submit = h("button", { class: "btn btn-primary" }, "Continue");
+  const m = data.methods || {};
+  authCard("Two-step verification", m.totp ? "Enter the 6-digit code from your authenticator app." : "Use your passkey to finish signing in.",
+    h("form", { onsubmit: async (ev) => {
+      ev.preventDefault();
+      submit.disabled = true; error.textContent = "";
+      try {
+        const r = await api("mfa/verify", { method: "POST", body: { code: code.value } });
+        csrf = r.csrf;
+        await start();
+      } catch (err) { error.textContent = err.message; submit.disabled = false; code.select(); }
+    } },
+    h("label", { class: "field" }, m.totp ? "Code" : "Recovery code", code),
+    h("div", { class: "auth-actions" }, submit, m.passkeys > 0 ? window.Passkeys?.loginButton?.(error) : null),
+    error),
+    h("p", { class: "muted small" }, m.recovery_codes_left > 0
+      ? "Lost your phone? Type one of your recovery codes in the box instead."
+      : "Lost your phone? Ask your administrator to reset your two-step verification."));
+  code.focus();
+}
+
+async function showEnrol() {
+  const usePasskey = window.Passkeys?.available?.() && h("button", { type: "button", class: "btn", onclick: async () => {
+    try {
+      const r = await window.Passkeys.register(/iPhone|iPad|Mac/.test(navigator.userAgent) ? "Apple passkey" : "Passkey");
+      csrf = r.csrf;
+      showRecoveryCodes(r.recovery_codes, start);
+    } catch (err) { toast(err.name === "NotAllowedError" ? "Cancelled." : err.message); }
+  } }, icon("shield"), "Use a passkey instead");
+  let setup;
+  try { setup = await api("mfa/setup"); } catch (err) { if (err.status === 401) showLogin(err.message); else toast(err.message); return; }
+  authCard("Set up two-step verification", "To keep your email safe, signing in needs a second step as well as your password.",
+    totpSetupForm(setup, false, async (r) => { csrf = r.csrf; showRecoveryCodes(r.recovery_codes, start); }),
+    usePasskey && h("div", { class: "or" }, h("span", {}, "or")), usePasskey || null);
+}
+
+/** Scan (or tap, on a phone), then prove it with a code. With needPassword, for changing it from Settings. */
+function totpSetupForm(setup, needPassword, done) {
+  const error = h("div", { class: "error", role: "alert" });
+  const code = codeInput({ maxlength: 7 });
+  const password = needPassword && h("input", { type: "password", name: "password", required: true, autocomplete: "current-password" });
+  const submit = h("button", { class: "btn btn-primary" }, "Turn on");
+  const grouped = setup.secret.match(/.{1,4}/g).join(" ");
+  return h("form", { class: "totp-setup", onsubmit: async (ev) => {
+    ev.preventDefault();
+    submit.disabled = true; error.textContent = "";
+    try { done(await api("mfa/setup", { method: "POST", body: { code: code.value, ...(password ? { password: password.value } : {}) } })); }
+    catch (err) { error.textContent = err.message; submit.disabled = false; }
+  } },
+  h("ol", { class: "totp-steps" },
+    h("li", {}, "Install an authenticator app on your phone, such as Google Authenticator, Microsoft Authenticator or 1Password."),
+    h("li", {}, "Scan this code with it:",
+      h("img", { class: "qr", src: setup.qr_code, width: 196, height: 196, alt: "QR code to add this webmail to your authenticator app" }),
+      h("span", { class: "muted small" }, "On this phone? ", h("a", { href: setup.otpauth_uri }, "Open it in your authenticator app"), ". Or type this key: "),
+      h("code", { class: "secret" }, grouped)),
+    h("li", {}, "Enter the 6-digit code it shows:", code)),
+  password && h("label", { class: "field" }, "Your password", password),
+  h("div", { class: "auth-actions" }, submit), error);
+}
+
+/** Shown once: the codes that get someone in if they lose their phone. */
+function showRecoveryCodes(codes, next) {
+  if (!codes?.length) return next();
+  const ok = h("button", { class: "btn btn-primary", disabled: true, onclick: () => next() }, "Continue");
+  const text = `${APP_NAME} recovery codes\nEach works once, instead of a code from your authenticator app.\n\n${codes.join("\n")}\n`;
+  authCard("Save your recovery codes", "If you lose your phone, each of these gets you in once. Keep them somewhere safe, such as a password manager. They won't be shown again.",
+    recoveryCodesBox(codes, text),
+    h("label", { class: "check" }, h("input", { type: "checkbox", onchange: (e) => { ok.disabled = !e.target.checked; } }), "I've saved my recovery codes"),
+    h("div", { class: "auth-actions" }, ok));
+}
+
+function recoveryCodesBox(codes, text) {
+  const download = () => {
+    const a = h("a", { href: URL.createObjectURL(new Blob([text], { type: "text/plain" })), download: "recovery-codes.txt" });
+    document.body.append(a); a.click(); a.remove();
+  };
+  return h("div", { class: "codes-box" },
+    h("ul", { class: "codes" }, codes.map((c) => h("li", {}, h("code", {}, c)))),
+    h("div", { class: "row" },
+      h("button", { type: "button", class: "btn btn-sm", onclick: async () => { try { await navigator.clipboard.writeText(text); toast("Copied."); } catch { toast("Copy didn't work: select the codes instead."); } } }, "Copy"),
+      h("button", { type: "button", class: "btn btn-sm", onclick: download }, "Download")));
 }
 
 // ------------------------------------------------------------------------------------------------ the shell
@@ -551,6 +652,38 @@ function formFor(fields, label, onSubmit) {
   } }, fields, button, error);
 }
 
+/** Settings: the authenticator app and recovery codes. Two-step verification can't be turned off. */
+async function twoStepSettings() {
+  const st = await api("mfa/status");
+  const box = h("section", {}, h("h3", {}, "Two-step verification"));
+  const area = h("div");
+  const passwordForm = (label, onPassword) => {
+    const pw = h("input", { type: "password", required: true, autocomplete: "current-password" });
+    return formFor([h("label", { class: "field" }, "Your password", pw)], label, async () => onPassword(pw.value));
+  };
+  box.append(
+    h("p", { class: "muted" }, "Required for everyone: after your password, you confirm it's you with your authenticator app or a passkey."),
+    h("div", { class: "row between" }, h("div", {}, h("strong", {}, "Authenticator app"),
+      h("div", { class: "muted small" }, st.totp ? `On since ${new Date(st.totp_since).toLocaleDateString()}` : "Not set up")),
+      h("button", { class: "btn btn-sm", onclick: async () => {
+        const setup = await api("mfa/setup");
+        area.replaceChildren(totpSetupForm(setup, true, (r) => {
+          toast("Your authenticator app is set up.");
+          area.replaceChildren(r.recovery_codes?.length ? h("div", {}, h("p", {}, "Your new recovery codes. Save them now: they won't be shown again."),
+            recoveryCodesBox(r.recovery_codes, r.recovery_codes.join("\n"))) : "");
+        }));
+      } }, st.totp ? "Change" : "Set up")),
+    h("div", { class: "row between" }, h("div", {}, h("strong", {}, "Recovery codes"),
+      h("div", { class: "muted small" }, `${st.recovery_codes_left} of 10 left. Each gets you in once if you lose your phone.`)),
+      h("button", { class: "btn btn-sm", onclick: () => area.replaceChildren(passwordForm("Make new codes", async (password) => {
+        const r = await api("mfa/recovery-codes", { method: "POST", body: { password } });
+        area.replaceChildren(h("p", {}, "Your old codes no longer work. Save these now: they won't be shown again."),
+          recoveryCodesBox(r.recovery_codes, r.recovery_codes.join("\n")));
+      })) }, "New codes")),
+    area);
+  return box;
+}
+
 const SETTINGS = {
   async account() {
     return h("div", {},
@@ -568,7 +701,7 @@ const SETTINGS = {
       "Save", async (v) => { await api("mailbox", { method: "POST", body: { id: m.id, ...v } }); Object.assign(m, v); toast("Saved."); }))));
   },
   async security() {
-    return h("div", {}, window.Passkeys?.settings?.() || h("section", {}, h("h3", {}, "Passkeys"), h("p", { class: "muted" }, "Not available in this browser.")),
+    return h("div", {}, await twoStepSettings(), window.Passkeys?.settings?.() || h("section", {}, h("h3", {}, "Passkeys"), h("p", { class: "muted" }, "Not available in this browser.")),
       window.Notifications?.settings?.() || null);
   },
   async "admin-users"() {
@@ -576,7 +709,8 @@ const SETTINGS = {
     const boxes = (selected) => h("div", {}, mailboxes.map((m) => h("label", { class: "check" }, h("input", { type: "checkbox", name: `mb_${m.id}`, checked: selected.includes(m.id) }), m.address)));
     const pickBoxes = (v) => mailboxes.filter((m) => v[`mb_${m.id}`] === "on").map((m) => m.id);
     const table = h("table", { class: "list" }, h("tr", {}, h("th", {}, "User"), h("th", {}, "Role"), h("th", {}, "Mailboxes"), h("th", {}, "")),
-      users.map((u) => h("tr", {}, h("td", {}, u.name, h("div", { class: "muted small" }, u.email), u.disabled && h("span", { class: "pill bad" }, "disabled")),
+      users.map((u) => h("tr", {}, h("td", {}, u.name, h("div", { class: "muted small" }, u.email), u.disabled && h("span", { class: "pill bad" }, "disabled"),
+          !u.two_step && h("span", { class: "pill", title: "Sets it up at their next sign-in" }, "two-step not set up")),
         h("td", {}, u.role), h("td", {}, mailboxes.filter((m) => u.mailbox_ids.includes(m.id)).map((m) => m.address).join(", ") || h("span", { class: "muted" }, "none")),
         h("td", {}, h("button", { class: "btn btn-sm", onclick: () => editUser(u) }, "Edit")))));
     const editUser = (u) => {
@@ -585,7 +719,14 @@ const SETTINGS = {
           h("label", { class: "field" }, "Role", h("select", { name: "role" }, h("option", { value: "user", selected: u.role === "user" }, "User"), h("option", { value: "admin", selected: u.role === "admin" }, "Administrator"))),
           h("label", { class: "field" }, "New password (leave empty to keep)", h("input", { type: "password", name: "password", minlength: 10, autocomplete: "new-password" })),
           h("label", { class: "check" }, h("input", { type: "checkbox", name: "disabled", checked: u.disabled }), "Can't sign in (disabled)"),
-          h("div", { class: "field" }, "Mailboxes", boxes(u.mailbox_ids))],
+          h("div", { class: "field" }, "Mailboxes", boxes(u.mailbox_ids)),
+          u.id !== state.user.id && u.two_step && h("div", { class: "field" }, "Two-step verification",
+            h("p", { class: "muted small" }, "Lost their phone? A reset removes their authenticator app, passkeys and recovery codes and signs them out. They set up a new one when they next sign in."),
+            h("button", { type: "button", class: "btn btn-sm btn-danger", onclick: async () => {
+              if (!confirm(`Reset two-step verification for ${u.email}?`)) return;
+              await api("admin/users/mfa-reset", { method: "POST", body: { id: u.id } });
+              toast("Reset. They'll set it up again at their next sign-in."); openSettings("admin-users");
+            } }, "Reset two-step verification"))],
         "Save", async (v) => {
           await api("admin/users/update", { method: "POST", body: { id: u.id, name: v.name, role: v.role, password: v.password || undefined, disabled: v.disabled === "on", mailbox_ids: pickBoxes(v) } });
           toast("Saved."); openSettings("admin-users");

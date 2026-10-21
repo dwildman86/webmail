@@ -12,6 +12,7 @@ final class Auth
     private const MAX_ATTEMPTS = 10;
     private const WINDOW_MINUTES = 15;
     private const IDLE_DAYS = 30;
+    private const PENDING_SECONDS = 600;
 
     public function __construct(private App $app)
     {
@@ -93,18 +94,63 @@ final class Auth
         if (password_needs_rehash($user['password_hash'], defined('PASSWORD_ARGON2ID') ? PASSWORD_ARGON2ID : PASSWORD_DEFAULT)) {
             $db->run('UPDATE {users} SET password_hash = ? WHERE id = ?', [self::hash($password), $user['id']]);
         }
-        $this->begin((int) $user['id']);
+        // The password is only the first step: the session can't read mail until the second step is done.
+        $this->beginPending((int) $user['id']);
         return (int) $user['id'];
     }
 
-    /** Start a signed-in session for a user (after a password or a passkey). */
+    /** After the password: the session may only do the second step (or set one up). */
+    public function beginPending(int $userId): void
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_regenerate_id(true);
+        }
+        $_SESSION = ['pending_uid' => $userId, 'pending_at' => time(), 'csrf' => bin2hex(random_bytes(32))];
+    }
+
+    /**
+     * A sign-in waiting for its second step: ['uid' => …, 'stage' => 'verify'] when the person has a second step to
+     * use, 'enrol' when they must set one up first. Null when there's none (or it took longer than 10 minutes).
+     */
+    public function pending(): ?array
+    {
+        $uid = (int) ($_SESSION['pending_uid'] ?? 0);
+        if (!$uid || time() - (int) ($_SESSION['pending_at'] ?? 0) > self::PENDING_SECONDS) {
+            return null;
+        }
+        $row = $this->app->db->one('SELECT id, email_enc, name_enc, disabled FROM {users} WHERE id = ?', [$uid]);
+        if (!$row || $row['disabled']) {
+            return null;
+        }
+        $c = $this->app->crypto;
+        return ['uid' => $uid, 'stage' => (new Mfa($this->app))->configured($uid) ? 'verify' : 'enrol',
+            'email' => $c->decrypt($row['email_enc'], 'users.email'), 'name' => $c->decrypt($row['name_enc'], 'users.name') ?? ''];
+    }
+
+    /** Start a signed-in session: after the second step, or a passkey (which is both steps in one). */
     public function begin(int $userId): void
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
             session_regenerate_id(true); // a new session id at sign-in: an id planted before it is useless
         }
-        $_SESSION = ['uid' => $userId, 'csrf' => bin2hex(random_bytes(32)), 'seen' => time()];
+        $version = (int) $this->app->db->value('SELECT session_version FROM {users} WHERE id = ?', [$userId]);
+        $_SESSION = ['uid' => $userId, 'sv' => $version, 'csrf' => bin2hex(random_bytes(32)), 'seen' => time()];
         $this->app->db->run('UPDATE {users} SET last_login_at = ? WHERE id = ?', [App::now(), $userId]);
+    }
+
+    /** For sensitive changes: the person's password again. */
+    public function confirmPassword(int $userId, string $password): void
+    {
+        $db = $this->app->db;
+        $key = $this->app->crypto->blindIndex('confirm:' . $userId, 'login');
+        if ((int) $db->value('SELECT COUNT(*) FROM {login_attempts} WHERE key_bidx = ? AND at > ?', [$key, gmdate('Y-m-d H:i:s', time() - self::WINDOW_MINUTES * 60)]) >= self::MAX_ATTEMPTS) {
+            throw new HttpError(429, 'Too many wrong passwords. Wait 15 minutes and try again.', 'rate_limited');
+        }
+        $hash = (string) $db->value('SELECT password_hash FROM {users} WHERE id = ?', [$userId]);
+        if (!password_verify($password, $hash)) {
+            $db->run('INSERT INTO {login_attempts} (key_bidx, at) VALUES (?, ?)', [$key, App::now()]);
+            throw new HttpError(422, 'Your password is wrong', 'wrong_password');
+        }
     }
 
     public function logout(): void
@@ -122,8 +168,15 @@ final class Auth
         if (!$uid || (time() - (int) ($_SESSION['seen'] ?? 0)) > self::IDLE_DAYS * 86400) {
             return null;
         }
-        $row = $this->app->db->one('SELECT id, email_enc, name_enc, role, disabled FROM {users} WHERE id = ?', [$uid]);
-        if (!$row || $row['disabled']) {
+        $row = $this->app->db->one('SELECT id, email_enc, name_enc, role, disabled, session_version FROM {users} WHERE id = ?', [$uid]);
+        // Signed out everywhere (a password change or a reset of their second step) since this session began.
+        if (!$row || $row['disabled'] || (int) $row['session_version'] !== (int) ($_SESSION['sv'] ?? -1)) {
+            return null;
+        }
+        // Two-step verification is required: someone without it (signed in before it was, or reset by an
+        // administrator) has to set it up before going any further.
+        if (!(new Mfa($this->app))->configured((int) $uid)) {
+            $this->beginPending((int) $uid);
             return null;
         }
         $_SESSION['seen'] = time();

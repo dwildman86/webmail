@@ -178,8 +178,9 @@ final class CoreTest extends TestCase
         $this->assertStringStartsWith('$argon2id$', $hash);
         $_SESSION = [];
         $this->assertSame($uid, $auth->login('owner@acme.test', 'correct horse battery', '203.0.113.1'), 'emails are case-insensitive');
-        $this->assertSame($uid, $auth->user()['id']);
-        $this->assertSame('owner@acme.test', strtolower($auth->user()['email']));
+        $this->assertNull($auth->user(), 'a password alone never reads mail');
+        $this->assertSame(['uid' => $uid, 'stage' => 'enrol'], array_intersect_key($auth->pending(), ['uid' => 1, 'stage' => 1]));
+        $this->assertSame('Owner@Acme.test', $auth->pending()['email']);
         try {
             $auth->createUser('owner@acme.test', 'Again', 'correct horse battery');
             $this->fail('duplicate');
