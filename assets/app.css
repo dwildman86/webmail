@@ -249,3 +249,28 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
 .or + .btn { width: 100%; height: 42px; }
 .totp-steps { list-style: decimal; }
 .totp-steps .code-input { width: 100%; }
+
+/* Contacts */
+.folders li.sep { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.book-tabs { display: flex; gap: 4px; margin: 10px 0 8px; padding: 3px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
+.book-tabs button { flex: 1; border: 0; background: none; padding: 6px 8px; border-radius: 7px; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; display: flex; justify-content: center; gap: 6px; align-items: center; }
+.book-tabs button.on { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.book-tabs .count { font-size: 11.5px; color: var(--dim); }
+.book-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.book-actions .btn svg { width: 15px; height: 15px; }
+.book-note { margin: 4px 0 6px; }
+.msg.contact { grid-template-rows: auto auto; }
+.contact-card { max-width: 640px; }
+.contact-head { display: flex; gap: 16px; align-items: center; margin-bottom: 18px; }
+.contact-head .avatar { width: 64px; height: 64px; font-size: 22px; }
+.contact-head h1 { margin: 0 0 6px; }
+.contact-card > .row { margin-bottom: 20px; }
+.contact-row { display: flex; gap: 14px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.contact-row > svg { width: 20px; height: 20px; flex: none; color: var(--muted); margin-top: 8px; }
+.contact-row .notes { white-space: pre-wrap; }
+.add-contact { margin: 0 0 0 10px; display: inline-flex; gap: 4px; align-items: center; font-size: 12.5px; }
+.add-contact svg { width: 14px; height: 14px; }
+.suggest .pill { margin-left: 8px; font-size: 11px; }
+.book-head { width: 100%; display: flex; flex-direction: column; }
+.book-head .book-tabs { margin: 10px 0 10px; }
+.book-tabs button { white-space: nowrap; }

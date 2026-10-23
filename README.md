@@ -38,6 +38,7 @@ If the last step fails, the installer removes what it created, so you can fix th
 - **Folders**: Inbox, Starred, Sent, Drafts, Archive, Spam and Trash. Conversations are grouped into threads. Email that GhostParse's spam check flags goes to Spam.
 - **Search**: searches senders, recipients, subjects and message text. It works on the encrypted data (see below).
 - **Writing**: rich text, attachments up to 20 MB, Cc and Bcc, address suggestions from people you've written to, and a signature per mailbox. Replies keep the thread together in the recipient's mail app too.
+- **Contacts**: two address books. **My contacts** is private to each person. **Shared** is seen by everyone, and administrators keep it up to date. Add contacts by hand, with **Add to contacts** on any email, or by importing a **.vcf** or **.csv** file from Gmail, Outlook, iPhone or Android. Importing fills in missing details for contacts you already have and never overwrites them. Export either book as a .vcf file. When you write an email, names and addresses are suggested from both books, then from people you've written to before.
 - **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `Esc` close.
 
 ### On your phone and computer
@@ -50,7 +51,7 @@ If the last step fails, the installer removes what it created, so you can fix th
 
 ## Security
 
-- **Encrypted at rest.** Senders, recipients, subjects, message bodies, attachments, names, email addresses, contacts, signatures, push subscriptions and passkeys are encrypted in the database with XChaCha20-Poly1305 (libsodium). Each value is bound to its column, so values can't be swapped between columns. Someone with a copy of the database sees only ciphertext.
+- **Encrypted at rest.** Senders, recipients, subjects, message bodies, attachments, names, email addresses, contacts and address books, signatures, push subscriptions and passkeys are encrypted in the database with XChaCha20-Poly1305 (libsodium). Each value is bound to its column, so values can't be swapped between columns. Someone with a copy of the database sees only ciphertext.
 - **Encrypted search.** Searching uses keyed blind indexes (HMAC-SHA-256) of words, never the words themselves.
 - **The key lives in `config.php`**, outside the database. It's created at install, and its file permissions are set to 0640. Keep a backup of the file somewhere safe.
 - **Two-step verification is required for everyone.** After their password, people enter a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password and others) or use a passkey. Anyone without one, including existing users after an update, sets it up at their next sign-in, before they can see any mail. Each person gets ten one-time recovery codes for a lost phone. An administrator can reset someone's two-step verification under **Settings → Users**, which also signs them out everywhere. The authenticator secret is stored encrypted, and recovery codes only as keyed hashes.

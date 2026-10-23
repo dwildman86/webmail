@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/app/bootstrap.php';
 
+use Webmail\AddressBook;
 use Webmail\Admin;
 use Webmail\App;
 use Webmail\Auth;
@@ -166,7 +167,35 @@ try {
             $in = Http::body();
             Http::json(['id' => $store->saveDraft($user, (int) ($in['mailbox_id'] ?? 0), $in)]);
         case 'GET contacts':
-            Http::json(['contacts' => $store->contacts($user['id'])]);
+            // Suggestions while writing: both address books, then people written to before.
+            Http::json(['contacts' => (new AddressBook($app))->suggestions($user['id'])]);
+        case 'GET book':
+            $book = new AddressBook($app);
+            Http::json(['personal' => $book->list($user['id']), 'shared' => $book->list(AddressBook::SHARED), 'can_edit_shared' => $user['role'] === 'admin']);
+        case 'POST book/save':
+            $in = Http::body();
+            $owner = AddressBook::owner($user, (string) ($in['book'] ?? 'personal'));
+            AddressBook::checkCanEdit($user, $owner);
+            Http::json(['id' => (new AddressBook($app))->save($owner, $in, isset($in['id']) ? (int) $in['id'] : null)]);
+        case 'POST book/delete':
+            $in = Http::body();
+            $owner = AddressBook::owner($user, (string) ($in['book'] ?? 'personal'));
+            AddressBook::checkCanEdit($user, $owner);
+            Http::json(['deleted' => (new AddressBook($app))->delete($owner, (array) ($in['ids'] ?? []))]);
+        case 'POST book/import':
+            $in = Http::body();
+            $owner = AddressBook::owner($user, (string) ($in['book'] ?? 'personal'));
+            AddressBook::checkCanEdit($user, $owner);
+            Http::json((new AddressBook($app))->import($owner, (string) ($in['text'] ?? ''), (string) ($in['filename'] ?? '')));
+        case 'GET book/export':
+            $shared = ($_GET['book'] ?? '') === 'shared';
+            $vcf = (new AddressBook($app))->exportVcard($shared ? AddressBook::SHARED : $user['id']);
+            header('Content-Type: text/vcard; charset=utf-8');
+            header('Content-Disposition: attachment; filename="' . ($shared ? 'shared-contacts' : 'my-contacts') . '.vcf"');
+            header('Cache-Control: private, no-store');
+            header("Content-Security-Policy: default-src 'none'; sandbox");
+            echo $vcf;
+            exit;
         case 'POST mailbox':
             $in = Http::body();
             $id = (int) ($in['id'] ?? 0);

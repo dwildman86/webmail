@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -143,6 +143,23 @@ final class Schema
                     code_bidx BINARY(16) NOT NULL UNIQUE,
                     created_at DATETIME NOT NULL,
                     FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Address books: owner_id is the user for a personal book, 0 for the shared one. Every field is
+            // encrypted; email_bidx finds duplicates without revealing the address.
+            3 => [
+                "CREATE TABLE IF NOT EXISTS {address_book} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    owner_id INT UNSIGNED NOT NULL,
+                    email_bidx BINARY(16) NOT NULL,
+                    email_enc TEXT NOT NULL,
+                    name_enc TEXT NULL,
+                    phone_enc TEXT NULL,
+                    company_enc TEXT NULL,
+                    notes_enc TEXT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    UNIQUE KEY book_email (owner_id, email_bidx)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

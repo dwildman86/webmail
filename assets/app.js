@@ -52,6 +52,11 @@ const ICONS = {
   mail: "M3 6h18v12H3z M3 7l9 6 9-6",
   logout: "M15 4h4v16h-4 M10 8l-4 4 4 4 M6 12h10",
   shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
+  contacts: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 20a8 8 0 0 1 16 0",
+  personAdd: "M10 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M2 20a8 8 0 0 1 13-6.2 M19 14v6 M16 17h6",
+  phone: "M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z",
+  upload: "M12 16V4 M7 9l5-5 5 5 M4 20h16",
+  download: "M12 4v12 M7 11l5 5 5-5 M4 20h16",
 };
 const icon = (name) => h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
   h("path", { d: ICONS[name] }));
@@ -259,7 +264,10 @@ function renderShell() {
   $list = h("div", { class: "messages", role: "list" });
   $reader = h("section", { class: "reader" }, placeholder());
   $listTitle = h("div", { class: "list-title" });
-  $search = h("input", { type: "search", placeholder: "Search mail", "aria-label": "Search mail", value: state.query, onkeydown: (e) => {
+  $search = h("input", { type: "search", placeholder: "Search mail", "aria-label": "Search mail", value: state.query, oninput: () => {
+    if (state.folder === "contacts") renderContacts();
+  }, onkeydown: (e) => {
+    if (state.folder === "contacts") { if (e.key === "Escape") { $search.value = ""; renderContacts(); } return; }
     if (e.key === "Enter") { state.query = $search.value.trim(); state.page = 1; loadList(); }
     if (e.key === "Escape") { $search.value = ""; state.query = ""; loadList(); }
   } });
@@ -304,9 +312,11 @@ function unreadFor(folder) {
 }
 
 function renderFolders() {
-  $folders.replaceChildren(...FOLDERS.map(([key, label, ic]) => {
+  $search.placeholder = state.folder === "contacts" ? "Search contacts" : "Search mail";
+  $search.setAttribute("aria-label", $search.placeholder);
+  $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"]].map(([key, label, ic]) => {
     const n = key === "starred" ? 0 : unreadFor(key);
-    return h("li", {}, h("a", { href: "#", class: state.folder === key && !state.query ? "on" : "", onclick: (e) => {
+    return h("li", { class: key === "contacts" ? "sep" : "" }, h("a", { href: "#", class: state.folder === key && !state.query ? "on" : "", onclick: (e) => {
       e.preventDefault();
       state.folder = key; state.query = ""; state.page = 1; $search.value = "";
       $shell.classList.remove("menu", "reading");
@@ -321,6 +331,7 @@ function placeholder() {
 
 // ------------------------------------------------------------------------------------------------ the list
 async function loadList(append = false) {
+  if (state.folder === "contacts") return loadContacts();
   const folder = state.query ? "all" : state.folder === "starred" ? "all" : state.folder;
   const label = state.query ? `Results for “${state.query}”` : FOLDERS.find((f) => f[0] === state.folder)[1];
   $listTitle.replaceChildren(h("h2", {}, label));
@@ -361,6 +372,114 @@ async function refresh() {
     renderFolders();
   } catch { /* the list call reports problems */ }
   await loadList();
+}
+
+// ------------------------------------------------------------------------------------------------ contacts
+// Two address books: "My contacts" (only you) and "Shared" (everyone; administrators change it).
+const book = { tab: "personal", personal: [], shared: [], canEditShared: false, selected: null };
+
+async function loadContacts() {
+  try {
+    const r = await api("book");
+    Object.assign(book, { personal: r.personal, shared: r.shared, canEditShared: r.can_edit_shared });
+  } catch (err) { $list.replaceChildren(h("div", { class: "empty" }, err.message)); return; }
+  renderContacts();
+}
+
+const canEdit = (which) => which === "personal" || book.canEditShared;
+
+function renderContacts() {
+  const term = $search.value.trim().toLowerCase();
+  const all = book[book.tab];
+  const shown = term ? all.filter((c) => [c.name, c.email, c.company, c.phone].some((v) => v.toLowerCase().includes(term))) : all;
+  const fileIn = h("input", { type: "file", accept: ".vcf,.csv,text/vcard,text/csv", hidden: true, onchange: async () => {
+    const f = fileIn.files[0];
+    if (!f) return;
+    try {
+      const r = await api("book/import", { method: "POST", body: { book: book.tab, filename: f.name, text: await f.text() } });
+      toast(`Imported: ${r.added} added, ${r.updated} updated${r.skipped ? `, ${r.skipped} without a valid address skipped` : ""}.`);
+      contacts = null;
+      loadContacts();
+    } catch (err) { toast(err.message); }
+  } });
+  const tab = (key, label) => h("button", { class: book.tab === key ? "on" : "", role: "tab", "aria-selected": String(book.tab === key), onclick: () => { book.tab = key; book.selected = null; $reader.replaceChildren(placeholderFor("contacts")); renderContacts(); } },
+    label, h("span", { class: "count" }, String(book[key].length)));
+  $listTitle.replaceChildren(h("div", { class: "book-head" }, h("h2", {}, "Contacts"),
+    h("div", { class: "book-tabs", role: "tablist" }, tab("personal", "My contacts"), tab("shared", "Shared")),
+    h("div", { class: "book-actions" },
+      canEdit(book.tab) && h("button", { class: "btn btn-sm btn-primary", onclick: () => editContact(null) }, icon("personAdd"), "New"),
+      canEdit(book.tab) && h("button", { class: "btn btn-sm", title: "Import contacts from a .vcf or .csv file (Gmail, Outlook, iPhone…)", onclick: () => fileIn.click() }, icon("upload"), "Import"),
+      all.length > 0 && h("a", { class: "btn btn-sm", href: `api.php?a=book/export&book=${book.tab}`, download: "", title: "Download as a .vcf file" }, icon("download"), "Export"),
+      fileIn),
+    book.tab === "shared" && !book.canEditShared && h("p", { class: "muted small book-note" }, "Everyone can see these. Only an administrator can change them.")));
+  if (!shown.length) {
+    $list.replaceChildren(h("div", { class: "empty" }, icon("contacts"), h("p", {}, term ? "No contacts match." : book.tab === "personal"
+      ? "No contacts yet. Add one, import a file, or use “Add to contacts” on an email." : "The shared address book is empty.")));
+    return;
+  }
+  $list.replaceChildren(...shown.map((c) => h("div", { class: `msg contact${book.selected === c.id ? " on" : ""}`, role: "listitem", tabindex: "0",
+    onclick: () => showContact(c), onkeydown: (e) => { if (e.key === "Enter") showContact(c); } },
+  avatar({ name: c.name, address: c.email }),
+  h("div", { class: "from" }, c.name || c.email),
+  h("div", { class: "line" }, h("span", { class: "snippet" }, c.name ? c.email : ""), c.company && h("span", { class: "snippet" }, ` · ${c.company}`)))));
+}
+
+function placeholderFor(kind) {
+  return kind === "contacts" ? h("div", { class: "placeholder" }, h("div", {}, icon("contacts"), h("p", {}, "Choose a contact."))) : placeholder();
+}
+
+function showContact(c) {
+  book.selected = c.id;
+  renderContacts();
+  $shell.classList.add("reading");
+  const which = c.book;
+  const other = which === "personal" ? "shared" : "personal";
+  const copy = canEdit(other) && h("button", { class: "btn", onclick: async () => {
+    try { await api("book/save", { method: "POST", body: { ...c, id: undefined, book: other } }); toast(other === "shared" ? "Copied to the shared address book." : "Copied to your contacts."); loadContacts(); }
+    catch (err) { toast(err.data?.error === "duplicate" ? "It's already there." : err.message); }
+  } }, other === "shared" ? "Copy to shared" : "Copy to my contacts");
+  const row = (ic, label, value) => value && h("div", { class: "contact-row" }, icon(ic), h("div", {}, h("div", { class: "muted small" }, label), value));
+  $reader.replaceChildren(
+    h("div", { class: "reader-bar" }, h("button", { class: "icon-btn back", "aria-label": "Back", onclick: closeContact }, icon("back")), h("span", { class: "spacer" }),
+      canEdit(which) && h("button", { class: "icon-btn", title: "Delete", "aria-label": "Delete contact", onclick: async () => {
+        if (!confirm(`Delete ${c.name || c.email} from ${which === "shared" ? "the shared address book" : "your contacts"}?`)) return;
+        await api("book/delete", { method: "POST", body: { book: which, ids: [c.id] } }); contacts = null; closeContact(); loadContacts();
+      } }, icon("trash"))),
+    h("div", { class: "reader-body contact-card" },
+      h("div", { class: "contact-head" }, avatar({ name: c.name, address: c.email }), h("div", {}, h("h1", {}, c.name || c.email),
+        h("span", { class: "pill" }, which === "shared" ? "Shared address book" : "My contacts"))),
+      h("div", { class: "row" }, h("button", { class: "btn btn-primary", onclick: () => compose({ to: c.email }) }, icon("compose"), "Write an email"),
+        canEdit(which) && h("button", { class: "btn", onclick: () => editContact(c) }, "Edit"), copy || null),
+      row("mail", "Email", c.email),
+      row("phone", "Phone", c.phone && h("a", { href: `tel:${c.phone.replace(/[^+\d]/g, "")}` }, c.phone)),
+      row("inbox", "Company", c.company),
+      c.notes && h("div", { class: "contact-row" }, icon("drafts"), h("div", {}, h("div", { class: "muted small" }, "Notes"), h("div", { class: "notes" }, c.notes)))));
+}
+
+function closeContact() {
+  book.selected = null;
+  $shell.classList.remove("reading");
+  $reader.replaceChildren(placeholderFor("contacts"));
+  renderContacts();
+}
+
+function editContact(c) {
+  const which = c ? c.book : book.tab;
+  const field = (name, label, attrs = {}) => h("label", { class: "field" }, label, h(attrs.rows ? "textarea" : "input", { name, value: c?.[name] || "", ...attrs }, attrs.rows ? c?.[name] || "" : null));
+  $shell.classList.add("reading");
+  $reader.replaceChildren(
+    h("div", { class: "reader-bar" }, h("button", { class: "icon-btn back", "aria-label": "Back", onclick: () => (c ? showContact(c) : closeContact()) }, icon("back"))),
+    h("div", { class: "reader-body contact-card" }, h("h1", {}, c ? "Edit contact" : which === "shared" ? "New shared contact" : "New contact"),
+      formFor([field("name", "Name", { maxlength: 200, autocomplete: "off" }), field("email", "Email", { type: "email", required: true, autocomplete: "off" }),
+        field("phone", "Phone", { type: "tel", maxlength: 60 }), field("company", "Company", { maxlength: 200 }), field("notes", "Notes", { rows: 4, maxlength: 2000 })],
+      "Save", async (v) => {
+        const r = await api("book/save", { method: "POST", body: { ...v, book: which, id: c?.id } });
+        contacts = null;
+        await loadContacts();
+        const saved = book[which].find((x) => x.id === r.id);
+        if (saved) showContact(saved);
+      })));
+  $reader.querySelector("input[name=name]").focus();
 }
 
 // ------------------------------------------------------------------------------------------------ reading
@@ -443,7 +562,11 @@ function mailCard(t, open) {
       h("div", { class: "who" },
         h("div", {}, h("span", { class: "name" }, who(t.from)), " ", h("span", { class: "addr" }, t.from?.name ? `<${t.from.address}>` : ""),
           t.authentication?.verdict === "fail" && h("span", { class: "pill bad", title: "This email failed SPF, DKIM and DMARC: it may not be from who it says" }, icon("shield"), "unverified sender")),
-        h("div", { class: "to" }, `To ${recipients}`),
+        h("div", { class: "to" }, `To ${recipients}`, t.from?.address && t.folder !== "sent" && h("button", { class: "linkish add-contact", title: "Add the sender to your contacts", onclick: async (e) => {
+          e.stopPropagation();
+          try { await api("book/save", { method: "POST", body: { book: "personal", email: t.from.address, name: t.from.name || "" } }); toast(`${who(t.from)} is in your contacts now.`); contacts = null; }
+          catch (err) { toast(err.data?.error === "duplicate" ? `${who(t.from)} is already in your contacts.` : err.message); }
+        } }, icon("personAdd"), "Add to contacts")),
         h("div", { class: "preview" }, (t.reply_text || t.text || "").slice(0, 160))),
       h("div", { class: "date", title: longDate(t.date) }, shortDate(t.date))),
     content);
@@ -474,7 +597,7 @@ async function compose(opts = {}) {
   const mine = new Set(state.mailboxes.map((m) => m.address.toLowerCase()));
   let fromId = draft?.mailbox_id || of?.mailbox_id || state.mailbox || state.mailboxes[0].id;
   const replyTarget = of && (of.reply_to?.length ? of.reply_to : [of.from]).filter(Boolean);
-  let to = [], cc = [], subject = "", quoted = null;
+  let to = opts.to ? [opts.to] : [], cc = [], subject = "", quoted = null;
   if (of && opts.mode !== "forward") {
     to = of.folder === "sent" ? of.to.map((a) => a.address) : replyTarget.map((a) => a.address);
     if (opts.mode === "replyAll") cc = [...of.to, ...(of.cc || [])].map((a) => a.address).filter((a) => !mine.has(a.toLowerCase()) && !to.includes(a));
@@ -603,11 +726,13 @@ function suggest(input, contactsPromise) {
     const term = input.value.split(",").pop().trim().toLowerCase();
     close();
     if (term.length < 2) return;
-    items = (await contactsPromise).filter((c) => c.includes(term)).slice(0, 8);
+    items = (await contactsPromise).filter((c) => c.email.includes(term) || c.name.toLowerCase().includes(term)).slice(0, 8);
     if (!items.length) return;
     index = 0;
     const r = input.getBoundingClientRect();
-    box = h("div", { class: "suggest", style: `left:${r.left}px;top:${r.bottom + 2}px` }, items.map((c, i) => h("div", { class: i === 0 ? "on" : "", onmousedown: (e) => { e.preventDefault(); pick(c); } }, c)));
+    box = h("div", { class: "suggest", style: `left:${r.left}px;top:${r.bottom + 2}px` }, items.map((c, i) => h("div", { class: i === 0 ? "on" : "", onmousedown: (e) => { e.preventDefault(); pick(c.email); } },
+      c.name ? h("span", {}, h("strong", {}, c.name), " ", h("span", { class: "muted" }, c.email)) : c.email,
+      c.source !== "recent" && h("span", { class: "pill" }, c.source === "shared" ? "shared" : "my contacts"))));
     document.body.append(box);
   });
   input.addEventListener("keydown", (e) => {
@@ -616,7 +741,7 @@ function suggest(input, contactsPromise) {
       e.preventDefault();
       index = (index + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
       [...box.children].forEach((c, i) => c.classList.toggle("on", i === index));
-    } else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(items[index]); } else if (e.key === "Escape") close();
+    } else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(items[index].email); } else if (e.key === "Escape") close();
   });
   input.addEventListener("blur", () => setTimeout(close, 150));
 }
@@ -768,6 +893,7 @@ const SETTINGS = {
 // ------------------------------------------------------------------------------------------------ keyboard
 document.addEventListener("keydown", (e) => {
   if (!$shell || e.target.closest("input, textarea, select, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey || document.querySelector(".overlay")) return;
+  if (state.folder === "contacts" && !["c", "/"].includes(e.key)) return; // mail shortcuts don't apply to contacts
   const idx = state.messages.findIndex((m) => m.id === state.selected);
   if (e.key === "c") { e.preventDefault(); compose(); }
   else if (e.key === "/") { e.preventDefault(); $search.focus(); }

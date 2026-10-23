@@ -6,7 +6,7 @@ namespace Webmail;
 /** The app's shared pieces, built once per request from config.php. */
 final class App
 {
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.2.0';
 
     private static ?self $instance = null;
     public readonly Db $db;
