@@ -47,6 +47,35 @@ if (Config::installed()) {
         . '<p class="muted">To run the installer again, delete <code>config.php</code> (and empty the database tables) first.</p>', 5);
 }
 
+$detectedUrl = (Http::isHttps() ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost')
+    . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+
+// Installed by an app installer (Softaculous, Installatron) or a script: it gave every setting in setup-preset.php with
+// 'auto' => true, then opened this page (or the first visitor does). Finish now, once.
+if (is_array($preset) && !empty($preset['auto'])) {
+    $lock = fopen($presetFile, 'r');
+    if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) {
+        page('Installing', '<h1>Installing…</h1><p>The webmail is being set up right now. Reload this page in a moment.</p>');
+    }
+    if (!Config::installed()) {
+        $preset['base_url'] = ($preset['base_url'] ?? '') ?: $detectedUrl;
+        try {
+            $done = Installer::unattended($preset);
+        } catch (InstallError $ex) {
+            flock($lock, LOCK_UN);
+            page('Install', '<h1>Almost there</h1><div class="notice bad">' . $e($ex->getMessage()) . '</div>'
+                . '<p>Fix this in your app installer (or in <code>setup-preset.php</code>) and reload this page. Or delete <code>setup-preset.php</code> and reload to use the installer wizard instead.</p>');
+        }
+    }
+    flock($lock, LOCK_UN);
+    @unlink($presetFile);
+    $list = !empty($done['connected']) ? '<ul class="checks">' . implode('', array_map(fn ($a) => '<li class="ok"><strong>' . $e($a) . '</strong></li>', $done['connected'])) . '</ul>' : '';
+    page('Done', '<h1>All set</h1><p>Your webmail is installed.' . ($list ? ' These addresses deliver here now:' : '') . '</p>' . $list
+        . (isset($done) && !$done['written'] ? '<div class="notice warn"><strong>One last step:</strong> this folder isn\'t writable, so save the text below as <code>config.php</code> next to <code>index.php</code>.</div><textarea class="config" readonly rows="14">' . $e($done['config']) . '</textarea>' : '')
+        . '<div class="notice warn"><strong>Back up <code>config.php</code></strong> somewhere safe: it holds the encryption key, and without it the stored mail can\'t be read.</div>'
+        . '<a class="btn btn-primary" href="./">Sign in</a>', 5);
+}
+
 session_name('wminstall');
 session_set_cookie_params(['httponly' => true, 'samesite' => 'Strict', 'secure' => Http::isHttps()]);
 session_start();
@@ -83,8 +112,6 @@ if (is_array($preset)) {
 $fromPreset = !empty($s['preset']);
 $error = '';
 $v = fn (string $k, string $default = '') => $e($_POST[$k] ?? $s['form'][$k] ?? $default);
-$detectedUrl = (Http::isHttps() ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost')
-    . rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
 
 // ------------------------------------------------------------------------------------------------ 1. requirements
 if ($step === 'check') {
