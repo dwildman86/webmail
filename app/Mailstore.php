@@ -103,6 +103,12 @@ final class Mailstore
         return $out;
     }
 
+    /** A mailbox the user can use (404 otherwise). */
+    public function mailbox(int $userId, int $mailboxId): array
+    {
+        return $this->requireMailbox($userId, $mailboxId);
+    }
+
     private function requireMailbox(int $userId, int $mailboxId): array
     {
         $row = $this->app->db->one('SELECT m.* FROM {mailboxes} m JOIN {user_mailboxes} um ON um.mailbox_id = m.id WHERE um.user_id = ? AND m.id = ?', [$userId, $mailboxId]);
@@ -454,11 +460,27 @@ final class Mailstore
         if ($text === '' && $html) {
             $text = trim(html_entity_decode(strip_tags(preg_replace('/<(br|\/p|\/div|\/li)\b[^>]*>/i', "\n", $html)), ENT_QUOTES | ENT_HTML5));
         }
+        // The signature is the GhostParse address's, added by GhostParse (unless this message leaves it out). A signature
+        // from before 1.5.0 moves there first; if GhostParse can't take it now, it's added here as it used to be.
+        $withSignature = !array_key_exists('signature', $in) || (bool) $in['signature'];
+        $legacy = '';
+        try {
+            if (!(new Signatures($this->app))->migrate($mailbox)) {
+                $legacy = $mailbox['signature'];
+            }
+        } catch (HttpError) {
+            $legacy = $mailbox['signature'];
+        }
+        if ($legacy !== '' && $withSignature) {
+            $text = rtrim($text) . "\n\n-- \n" . $legacy;
+            if ($html) {
+                $html .= '<div class="signature">-- <br>' . nl2br(htmlspecialchars($legacy, ENT_QUOTES | ENT_HTML5, 'UTF-8')) . '</div>';
+            }
+        }
         $payload = [
             'from' => ['address' => $mailbox['address'], 'name' => $mailbox['display_name'] !== '' ? $mailbox['display_name'] : $user['name']],
             'to' => $to, 'subject' => mb_substr($subject, 0, 998), 'text' => $text === '' ? ' ' : $text,
-            // The mailbox's own signature is in the message already, so GhostParse doesn't add the address's one.
-            'signature' => false,
+            'signature' => $withSignature && $legacy === '',
         ];
         if ($cc) {
             $payload['cc'] = $cc;

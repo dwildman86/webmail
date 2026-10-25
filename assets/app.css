@@ -274,3 +274,10 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
 .book-head { width: 100%; display: flex; flex-direction: column; }
 .book-head .book-tabs { margin: 10px 0 10px; }
 .book-tabs button { white-space: nowrap; }
+
+/* The signature GhostParse adds: under the message while writing, and in Settings → Mailboxes. */
+.compose-sig { padding: 6px 16px 10px; border-top: 1px dashed var(--line); font-size: 13px; }
+.compose-sig .check { align-items: flex-start; }
+.sig-preview { color: var(--muted); font-size: 13px; line-height: 1.45; margin-top: 4px; }
+.sig-preview .disclaimer { margin-top: 8px; font-size: 11.5px; }
+.sig-preview-wrap { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 4px; }

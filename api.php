@@ -14,6 +14,7 @@ use Webmail\Http;
 use Webmail\HttpError;
 use Webmail\Mailstore;
 use Webmail\Mfa;
+use Webmail\Signatures;
 
 Http::securityHeaders();
 if (!Config::installed()) {
@@ -196,13 +197,19 @@ try {
             header("Content-Security-Policy: default-src 'none'; sandbox");
             echo $vcf;
             exit;
-        case 'POST mailbox':
+        case 'GET mailbox/signature':
+            // The From name, position, signature and the domain's disclaimer, from GhostParse.
+            Http::json((new Signatures($app))->get($store->mailbox($user['id'], $int('id')), $user['role'] === 'admin'));
+        case 'POST mailbox/signature':
             $in = Http::body();
-            $id = (int) ($in['id'] ?? 0);
-            if (!in_array($id, array_column($store->mailboxesFor($user['id']), 'id'), true)) {
-                throw new HttpError(404, 'Mailbox not found', 'not_found');
-            }
-            $store->updateMailbox($id, array_intersect_key($in, array_flip(['display_name', 'signature'])));
+            $mailbox = $store->mailbox($user['id'], (int) ($in['id'] ?? 0));
+            Http::json((new Signatures($app))->save($mailbox, array_intersect_key($in, array_flip(['display_name', 'position', 'signature', 'disclaimer'])),
+                $user['role'] === 'admin'));
+        case 'POST mailbox':
+            // Before 1.5.0 the settings saved the name and signature here; both are on GhostParse now.
+            $in = Http::body();
+            $mailbox = $store->mailbox($user['id'], (int) ($in['id'] ?? 0));
+            (new Signatures($app))->save($mailbox, array_intersect_key($in, array_flip(['display_name', 'signature'])), false);
             Http::json(['ok' => true]);
         case 'POST password':
             $in = Http::body();

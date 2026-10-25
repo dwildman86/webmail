@@ -622,20 +622,28 @@ async function compose(opts = {}) {
   const bccRow = h("div", { class: "cf", hidden: true }, h("label", {}, "Bcc"), bccIn);
   const subjIn = h("input", { type: "text", value: subject, "aria-label": "Subject" });
   const editor = h("div", { class: "editor", contenteditable: "true", role: "textbox", "aria-multiline": "true", "aria-label": "Message", "data-placeholder": "Write your message…" });
-  const sig = h("div", { class: "signature" });
-  const swapSignature = () => {
-    const mb = state.mailboxes.find((m) => m.id === fromId);
-    sig.replaceChildren(...(mb?.signature ? ["-- ", h("br"), ...mb.signature.split("\n").flatMap((l) => [l, h("br")])] : []));
+  // The signature is the From address's on GhostParse, added when it's sent: shown here, with a switch to leave it out.
+  const sigOn = h("input", { type: "checkbox", checked: true });
+  const sigBox = h("div", { class: "compose-sig" });
+  const swapSignature = async () => {
+    const id = fromId;
+    const s = await loadSignature(id).catch(() => null);
+    if (id !== fromId) return;
+    const preview = s && signaturePreview(s);
+    sigBox.replaceChildren(preview
+      ? h("label", { class: "check" }, sigOn, h("span", {}, "Add my signature", preview))
+      : h("span", { class: "muted small" }, s ? "No signature for this address yet: add one in Settings → Mailboxes." : "The signature couldn't be loaded; GhostParse adds it as usual."));
   };
   if (draft) {
     const full = await api("message", { query: { id: String(draft.id), peek: "1" } }).catch(() => null);
     editor.append(...(full?.message.text || "").split("\n").flatMap((l) => [l, h("br")]));
+    // Drafts from before 1.5.0 have the signature in their text already.
+    if (/\n-- \n/.test(full?.message.text || "")) sigOn.checked = false;
   } else {
     editor.append(h("div", {}, h("br")));
-    swapSignature();
-    editor.append(sig);
     if (quoted) editor.append(h("br"), quoted);
   }
+  swapSignature();
   const files = [];
   const attList = h("div", { class: "compose-atts" });
   const renderAtts = () => attList.replaceChildren(...files.map((f, i) => h("span", { class: "att" }, icon("clip"), h("span", {}, f.filename), h("small", { class: "muted" }, size(f.size)),
@@ -655,7 +663,8 @@ async function compose(opts = {}) {
   const payload = () => {
     const clone = editor.cloneNode(true);
     return { mailbox_id: fromId, to: toIn.value, cc: ccIn.value, bcc: bccIn.value, subject: subjIn.value, html: clone.innerHTML, text: editor.innerText,
-      reply_to_id: of && opts.mode !== "forward" ? of.id : undefined, forward_of: of && opts.mode === "forward" ? of.id : undefined, attachments: files, draft_id: draftId || undefined };
+      reply_to_id: of && opts.mode !== "forward" ? of.id : undefined, forward_of: of && opts.mode === "forward" ? of.id : undefined, attachments: files, draft_id: draftId || undefined,
+      signature: sigOn.checked };
   };
   const sendBtn = h("button", { class: "btn btn-primary", onclick: async () => {
     sendBtn.disabled = true;
@@ -698,7 +707,7 @@ async function compose(opts = {}) {
         h("button", { class: "icon-btn", type: "button", title: "Quote", "aria-label": "Quote", onclick: cmd("formatBlock", "blockquote") }, icon("quote")),
         h("button", { class: "icon-btn", type: "button", title: "Link", "aria-label": "Link", onclick: () => { const u = prompt("Link address (https://…)"); if (u && /^https?:\/\//i.test(u)) cmd("createLink", u)(); } }, icon("link")),
         h("button", { class: "icon-btn", type: "button", title: "Attach files", "aria-label": "Attach files", onclick: () => fileIn.click() }, icon("clip")), fileIn),
-      editor, attList,
+      editor, sigBox, attList,
       h("div", { class: "compose-foot" }, sendBtn, h("button", { class: "btn", onclick: saveDraft }, "Save draft"), status, h("span", { class: "spacer" }),
         draftId && h("button", { class: "icon-btn", title: "Discard draft", "aria-label": "Discard draft", onclick: async () => { await api("messages/delete", { method: "POST", body: { ids: [draftId] } }); overlay.remove(); refresh(); } }, icon("trash")))));
   document.body.append(overlay);
@@ -777,6 +786,61 @@ function formFor(fields, label, onSubmit) {
   } }, fields, button, error);
 }
 
+/** Each mailbox's signature on GhostParse, loaded once per mailbox while the app is open. */
+const signatures = new Map();
+function loadSignature(mailboxId) {
+  if (!signatures.has(mailboxId)) {
+    signatures.set(mailboxId, api("mailbox/signature", { query: { id: String(mailboxId) } }).catch((err) => { signatures.delete(mailboxId); throw err; }));
+  }
+  return signatures.get(mailboxId);
+}
+
+/** The signature as it's added to an email (as GhostParse does: a block only when there's more than a name), and the disclaimer. */
+function signaturePreview(s, { disclaimer = true } = {}) {
+  const lines = s.position || s.signature ? [s.display_name, s.position, s.signature].filter(Boolean) : [];
+  if (!lines.length && !(disclaimer && s.disclaimer)) return null;
+  const text = (t) => t.split("\n").flatMap((l, i) => (i ? [h("br"), l] : [l]));
+  return h("div", { class: "sig-preview" },
+    lines.length ? h("div", { class: "signature" }, "-- ", h("br"), ...lines.flatMap((l, i) => [i ? h("br") : null, ...(i === 0 && s.display_name ? [h("strong", {}, l)] : text(l))]).filter(Boolean)) : null,
+    disclaimer && s.disclaimer ? h("div", { class: "disclaimer" }, ...text(s.disclaimer)) : null);
+}
+
+/** Settings → Mailboxes: one mailbox's From name, position and signature, and its domain's disclaimer. */
+async function signatureSettings(m) {
+  const box = h("section", {}, h("h3", {}, m.address));
+  let s;
+  try {
+    s = await loadSignature(m.id);
+  } catch (err) {
+    box.append(h("p", { class: "error" }, err.message));
+    return box;
+  }
+  const preview = h("div", { class: "sig-preview-wrap" });
+  const form = formFor([
+    h("label", { class: "field" }, "Name people see", h("input", { name: "display_name", value: s.display_name, maxlength: 100, placeholder: state.user.name })),
+    h("label", { class: "field" }, "Position", h("input", { name: "position", value: s.position, maxlength: 100, placeholder: "Customer support" })),
+    h("label", { class: "field" }, "Signature", h("textarea", { name: "signature", rows: 4, maxlength: 2000, placeholder: "Phone, website, opening hours…" }, s.signature)),
+    s.can_edit_disclaimer
+      ? h("label", { class: "field" }, `Disclaimer for everyone at ${s.domain}`, h("textarea", { name: "disclaimer", rows: 3, maxlength: 4000 }, s.disclaimer),
+        h("small", { class: "muted" }, "Added under the signature on every email from the domain, whoever sends it."))
+      : s.disclaimer && h("p", { class: "muted small" }, `Your administrator's disclaimer for ${s.domain} is added below it.`),
+    h("div", {}, h("span", { class: "muted small" }, "How it looks:"), preview),
+  ], "Save", async (v) => {
+    const saved = await api("mailbox/signature", { method: "POST", body: { id: m.id, ...v } });
+    signatures.set(m.id, Promise.resolve(saved));
+    m.display_name = saved.display_name;
+    toast("Saved.");
+  });
+  const show = () => {
+    const v = Object.fromEntries(new FormData(form));
+    preview.replaceChildren(signaturePreview({ ...s, ...v }) || h("p", { class: "muted small" }, "No signature: only the name is used, as the sender's name."));
+  };
+  form.addEventListener("input", show);
+  show();
+  box.append(form);
+  return box;
+}
+
 /** Settings: the authenticator app and recovery codes. Two-step verification can't be turned off. */
 async function twoStepSettings() {
   const st = await api("mfa/status");
@@ -820,10 +884,8 @@ const SETTINGS = {
   },
   async mailboxes() {
     if (!state.mailboxes.length) return h("p", { class: "muted" }, "You don't have a mailbox yet.");
-    return h("div", {}, ...state.mailboxes.map((m) => h("section", {}, h("h3", {}, m.address),
-      formFor([h("label", { class: "field" }, "Name people see", h("input", { name: "display_name", value: m.display_name, maxlength: 100 })),
-        h("label", { class: "field" }, "Signature", h("textarea", { name: "signature", rows: 4, maxlength: 5000 }, m.signature))],
-      "Save", async (v) => { await api("mailbox", { method: "POST", body: { id: m.id, ...v } }); Object.assign(m, v); toast("Saved."); }))));
+    return h("div", {}, h("p", { class: "muted" }, "Signatures are kept on GhostParse, so they're added to this address's email wherever it's sent from: here, your website or your shop."),
+      ...await Promise.all(state.mailboxes.map(signatureSettings)));
   },
   async security() {
     return h("div", {}, await twoStepSettings(), window.Passkeys?.settings?.() || h("section", {}, h("h3", {}, "Passkeys"), h("p", { class: "muted" }, "Not available in this browser.")),

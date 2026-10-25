@@ -74,6 +74,17 @@ final class GhostParse
         return $this->request('GET', '/v1/domains')['domains'] ?? [];
     }
 
+    /** The domain with this name (a list of one, or none), with its addresses, their signatures and its disclaimer. */
+    public function domainsNamed(string $name): array
+    {
+        return $this->request('GET', '/v1/domains?name=' . rawurlencode($name))['domains'] ?? [];
+    }
+
+    public function updateDomain(string $domainId, array $fields): array
+    {
+        return $this->request('PATCH', '/v1/domains/' . rawurlencode($domainId), $fields);
+    }
+
     public function updateAddress(string $domainId, string $addressId, array $fields): array
     {
         return $this->request('PATCH', '/v1/domains/' . rawurlencode($domainId) . '/addresses/' . rawurlencode($addressId), $fields);

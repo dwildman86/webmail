@@ -73,7 +73,13 @@ php install-cli.php --db-name=acme_mail --db-user=acme_mail --db-pass='…' \
 - **Mailboxes and users**: under **Settings → Connect addresses**, an administrator turns more GhostParse addresses into mailboxes. Under **Settings → Users**, they add people and choose which mailboxes each person can read and send from. A shared mailbox, such as support@, can belong to several people.
 - **Folders**: Inbox, Starred, Sent, Drafts, Archive, Spam and Trash. Conversations are grouped into threads. Email that GhostParse's spam check flags goes to Spam.
 - **Search**: searches senders, recipients, subjects and message text. It works on the encrypted data (see below).
-- **Writing**: rich text, attachments up to 20 MB, Cc and Bcc, address suggestions from people you've written to, and a signature per mailbox. Replies keep the thread together in the recipient's mail app too.
+- **Writing**: rich text, attachments up to 20 MB, Cc and Bcc, address suggestions from people you've written to, and a signature per mailbox.
+  The signature is the address's on GhostParse, so it's the same wherever the address's email is sent from (here,
+  your website, your shop):
+  - Under **Settings → Mailboxes**, set the From name, position and signature, with a preview.
+  - Administrators also set the domain's disclaimer there.
+  - While writing, the signature shows under the message, with a switch to leave it out of that email.
+  - Signatures from before 1.5.0 move to GhostParse by themselves, unless the address already has one there. Replies keep the thread together in the recipient's mail app too.
 - **Contacts**: two address books. **My contacts** is private to each person. **Shared** is seen by everyone, and administrators keep it up to date. Add contacts by hand, with **Add to contacts** on any email, or by importing a **.vcf** or **.csv** file from Gmail, Outlook, iPhone or Android. Importing fills in missing details for contacts you already have and never overwrites them. Export either book as a .vcf file. When you write an email, names and addresses are suggested from both books, then from people you've written to before.
 - **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `Esc` close.
 
@@ -87,7 +93,7 @@ php install-cli.php --db-name=acme_mail --db-user=acme_mail --db-pass='…' \
 
 ## Security
 
-- **Encrypted at rest.** Senders, recipients, subjects, message bodies, attachments, names, email addresses, contacts and address books, signatures, push subscriptions and passkeys are encrypted in the database with XChaCha20-Poly1305 (libsodium). Each value is bound to its column, so values can't be swapped between columns. Someone with a copy of the database sees only ciphertext.
+- **Encrypted at rest.** Senders, recipients, subjects, message bodies, attachments, names, email addresses, contacts and address books, push subscriptions and passkeys are encrypted in the database with XChaCha20-Poly1305 (libsodium). Each value is bound to its column, so values can't be swapped between columns. Someone with a copy of the database sees only ciphertext.
 - **Encrypted search.** Searching uses keyed blind indexes (HMAC-SHA-256) of words, never the words themselves.
 - **The key lives in `config.php`**, outside the database. It's created at install, and its file permissions are set to 0640. Keep a backup of the file somewhere safe.
 - **Two-step verification is required for everyone.** After their password, people enter a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password and others) or use a passkey. Anyone without one, including existing users after an update, sets it up at their next sign-in, before they can see any mail. Each person gets ten one-time recovery codes for a lost phone. An administrator can reset someone's two-step verification under **Settings → Users**, which also signs them out everywhere. The authenticator secret is stored encrypted, and recovery codes only as keyed hashes.
