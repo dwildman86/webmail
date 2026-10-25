@@ -102,6 +102,27 @@ final class GhostParse
         return $this->request('POST', '/v1/parse', null, $raw)['data'] ?? [];
     }
 
+    /** "Sign in with Google / Microsoft" for importing: the providers this GhostParse has, then start, claim, refresh. */
+    public function mailOAuthProviders(): array
+    {
+        return $this->request('GET', '/v1/mail-oauth/providers')['providers'] ?? [];
+    }
+
+    public function mailOAuthStart(string $provider, string $returnUrl): string
+    {
+        return (string) ($this->request('POST', '/v1/mail-oauth/start', ['provider' => $provider, 'return_url' => $returnUrl])['url'] ?? '');
+    }
+
+    public function mailOAuthClaim(string $handle): array
+    {
+        return $this->request('POST', '/v1/mail-oauth/claim', ['handle' => $handle]);
+    }
+
+    public function mailOAuthRefresh(string $provider, string $refreshToken): array
+    {
+        return $this->request('POST', '/v1/mail-oauth/refresh', ['provider' => $provider, 'refresh_token' => $refreshToken]);
+    }
+
     /** POST /v1/emails: returns id, message_id, thread_id, accepted, suppressed. */
     public function send(array $email): array
     {

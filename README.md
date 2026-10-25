@@ -73,9 +73,15 @@ php install-cli.php --db-name=acme_mail --db-user=acme_mail --db-pass='…' \
 Under **Settings → Import email**, copy your old email into the webmail, keeping folders, dates, and read and starred
 marks.
 
+- **Sign in with Google or Microsoft:** for Gmail, Google Workspace, Outlook.com and Microsoft 365, no app password
+  needed. The sign-in goes through GhostParse, which holds the Google and Microsoft apps; the webmail keeps the access
+  (encrypted) until you choose **Forget the sign-in**. The buttons only show when your GhostParse platform has set
+  them up.
 - **From your old provider (IMAP):** choose it (Gmail, Outlook.com, Yahoo, iCloud, your web host and others), then
   sign in. Gmail, Yahoo and iCloud need an app password. Choose where each folder goes; Trash, Spam and Gmail's All
   Mail are left out unless you choose them. Nothing on the old server is changed or deleted: it's read-only.
+- **From this hosting account:** on cPanel hosting, when the webmail is installed in the same account as the old
+  mailboxes, they're listed for you: choose one and its folders, no password needed. It reads the mail files directly.
 - **From a file:** an `.mbox` (Google Takeout, Thunderbird, Apple Mail) or a single `.eml`, uploaded in pieces. Gmail
   labels decide each message's folder.
 - It runs while the webmail is open, about 20 seconds at a time, and carries on where it stopped if you close it.

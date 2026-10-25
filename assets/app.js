@@ -151,6 +151,13 @@ async function start() {
     await loadList();
     window.Notifications?.afterSignIn?.(s);
     runImports().catch(() => {}); // an import left running carries on
+    // Back from signing in with Google or Microsoft to import email.
+    const q = new URLSearchParams(location.search);
+    if (q.has("mail_oauth") || q.has("mail_oauth_error")) {
+      pendingImportOAuth = { handle: q.get("mail_oauth"), error: q.get("mail_oauth_error") };
+      history.replaceState(null, "", location.pathname + location.hash);
+      openSettings("import");
+    }
 
   } catch (err) {
     if (err.status === 401 && err.data?.mfa) { csrf = err.data.csrf || csrf; showSecondStep(err.data); }
@@ -806,6 +813,14 @@ const IMPORT_PROVIDERS = [
 ];
 const IMPORT_TARGETS = [["inbox", "Inbox"], ["sent", "Sent"], ["drafts", "Drafts"], ["archive", "Archive"], ["spam", "Spam"], ["trash", "Trash"], ["", "Don't copy"]];
 
+/** A Google or Microsoft sign-in to finish (from the address it came back to). */
+let pendingImportOAuth = null;
+const IMPORT_OAUTH_ERRORS = {
+  denied: "The sign-in was cancelled, so nothing was copied.",
+  no_refresh: "The sign-in didn't allow ongoing access. Try again, and allow access to your email.",
+  failed: "The sign-in didn't finish. Try again, or use an app password instead.",
+};
+
 /** Imports carry on while the webmail is open: one step at a time, ~20 seconds each. */
 const importRunner = { running: false, listeners: new Set(), imports: [] };
 function importsChanged(list) {
@@ -839,12 +854,12 @@ async function runImports() {
 }
 
 function importRow(job, reload) {
-  const what = job.kind === "imap" ? `${job.username} on ${job.host}` : job.filename;
+  const what = job.kind === "imap" ? (job.provider ? `${job.username} (signed in with ${job.provider === "google" ? "Google" : "Microsoft"})` : `${job.username} on ${job.host}`) : job.kind === "maildir" ? `${job.address} (this hosting account)` : job.filename;
   const mailbox = state.mailboxes.find((m) => m.id === job.mailbox_id)?.address ?? "";
   const counts = `${job.imported.toLocaleString()} copied` + (job.skipped ? `, ${job.skipped.toLocaleString()} already here or too large` : "") + (job.failed ? `, ${job.failed} unreadable` : "");
   const progress = job.status === "uploading"
     ? `Uploading: ${Math.round((job.received / Math.max(job.size, 1)) * 100)}%`
-    : job.status === "running" ? (job.kind === "imap"
+    : job.status === "running" ? (job.kind !== "file"
       ? `Copying ${job.folders.find((f) => !f.done)?.name ?? ""}… ${counts}`
       : `Copying… ${Math.round((job.offset / Math.max(job.size, 1)) * 100)}%, ${counts}`)
     : job.status === "done" ? `Done: ${counts}` : `Stopped: ${job.note ?? ""}`;
@@ -856,13 +871,29 @@ function importRow(job, reload) {
     h("div", {}, h("strong", {}, what), h("span", { class: "muted small" }, ` → ${mailbox}`)),
     h("div", { class: "small" }, progress),
     job.note && job.status !== "failed" ? h("div", { class: "muted small" }, job.note) : null,
-    job.status === "running" && job.kind === "imap" ? h("div", { class: "muted small" }, "It carries on while the webmail is open. You can keep using it, or close it and come back.") : null,
+    job.status === "running" && job.kind !== "file" ? h("div", { class: "muted small" }, "It carries on while the webmail is open. You can keep using it, or close it and come back.") : null,
     h("div", { class: "row" },
-      job.kind === "imap" && job.status === "done" && job.can_check_again ? act("Check for new mail", "again", "btn btn-sm btn-primary") : null,
-      job.kind === "imap" && job.can_check_again && job.status === "done" ? act("Forget the password", "forget") : null,
+      job.kind !== "file" && job.status === "done" && job.can_check_again ? act("Check for new mail", "again", "btn btn-sm btn-primary") : null,
+      job.kind === "imap" && job.can_check_again && job.status === "done" ? act(job.provider ? "Forget the sign-in" : "Forget the password", "forget") : null,
       job.status !== "running" && job.status !== "uploading" ? act("Remove from list", "delete") : null),
-    job.kind === "imap" && job.status === "done" && job.can_check_again
-      ? h("p", { class: "muted small" }, "After your domain's email has moved here, choose Check for new mail once to copy anything that reached the old mailbox in the meantime. Then forget the password.") : null);
+    job.kind !== "file" && job.status === "done" && job.can_check_again
+      ? h("p", { class: "muted small" }, "After your domain's email has moved here, choose Check for new mail once to copy anything that reached the old mailbox in the meantime."
+        + (job.kind === "imap" ? (job.provider ? " Then forget the sign-in." : " Then forget the password.") : "")) : null);
+}
+
+/** Choose where each of the old mailbox's folders goes, then start. */
+function folderPicker(folders, mailboxSelect, start, heading = "Choose what to copy") {
+  const rows = folders.map((f) => ({ f, select: h("select", { "aria-label": `Copy ${f.name} into` }, IMPORT_TARGETS.map(([v, l]) => h("option", { value: v, selected: v === (f.target ?? "") }, l))) }));
+  const total = () => rows.reduce((n, r) => n + (r.select.value ? (r.f.count ?? 0) : 0), 0);
+  const summary = h("p", { class: "small" });
+  const update = () => { summary.textContent = `${total().toLocaleString()} emails to copy. Trash and Spam (and Gmail's All Mail and Starred) are left out unless you choose them.`; };
+  rows.forEach((r) => r.select.addEventListener("change", update));
+  update();
+  return h("div", {}, h("h4", {}, heading),
+    h("table", { class: "list" }, h("tr", {}, h("th", {}, "Folder"), h("th", {}, "Emails"), h("th", {}, "Copy into")),
+      rows.map((r) => h("tr", {}, h("td", {}, r.f.name), h("td", {}, r.f.count ?? "?"), h("td", {}, r.select)))),
+    summary,
+    formFor([mailboxSelect()], "Start copying", (w) => start(rows.map((r) => ({ raw: r.f.raw, target: r.select.value || null })), Number(w.mailbox_id || state.mailboxes[0].id))));
 }
 
 async function importSettings() {
@@ -897,24 +928,45 @@ async function importSettings() {
     login = { host: v.host.trim(), security: v.security, port: v.security === "starttls" ? 143 : 993, username: v.username.trim(), password: v.password };
     step2.replaceChildren(h("p", { class: "muted" }, "Signing in and reading the folders…"));
     const { folders } = await api("import/probe", { method: "POST", body: login }).catch((err) => { step2.replaceChildren(); throw err; });
-    const rows = folders.map((f) => ({ f, select: h("select", { "aria-label": `Copy ${f.name} into` }, IMPORT_TARGETS.map(([v, l]) => h("option", { value: v, selected: v === (f.target ?? "") }, l))) }));
-    const total = () => rows.reduce((n, r) => n + (r.select.value ? (r.f.count ?? 0) : 0), 0);
-    const summary = h("p", { class: "small" });
-    const update = () => { summary.textContent = `${total().toLocaleString()} emails to copy. Gmail's All Mail and Starred, Trash and Spam are left out unless you choose them.`; };
-    rows.forEach((r) => r.select.addEventListener("change", update));
-    update();
-    step2.replaceChildren(h("h4", {}, "Choose what to copy"),
-      h("table", { class: "list" }, h("tr", {}, h("th", {}, "Folder on the old server"), h("th", {}, "Emails"), h("th", {}, "Copy into")),
-        rows.map((r) => h("tr", {}, h("td", {}, r.f.name), h("td", {}, r.f.count ?? "?"), h("td", {}, r.select)))),
-      summary,
-      formFor([mailboxSelect()], "Start copying", async (w) => {
-        await api("import/imap", { method: "POST", body: { ...login, mailbox_id: Number(w.mailbox_id || state.mailboxes[0].id), folders: rows.map((r) => ({ raw: r.f.raw, target: r.select.value || null })) } });
-        step2.replaceChildren(); imapForm.reset(); login = null;
-        host.value = IMPORT_PROVIDERS[provider.value][1];
-        toast("Copying has started.");
-        await reload(); runImports();
-      }));
+    step2.replaceChildren(folderPicker(folders, mailboxSelect, async (choices, mailboxId) => {
+      await api("import/imap", { method: "POST", body: { ...login, mailbox_id: mailboxId, folders: choices } });
+      step2.replaceChildren(); imapForm.reset(); login = null;
+      host.value = IMPORT_PROVIDERS[provider.value][1];
+      toast("Copying has started.");
+      await reload(); runImports();
+    }));
   });
+
+  // Signed in with Google or Microsoft: no password.
+  const providers = (await api("import/oauth/providers").catch(() => ({ providers: [] }))).providers;
+  const oauthBox = h("div");
+  const signIn = providers.length ? h("div", { class: "row oauth-buttons" }, providers.map((p) => h("button", { class: "btn", type: "button", onclick: async (e) => {
+    e.target.disabled = true;
+    try {
+      location.href = (await api("import/oauth/start", { method: "POST", body: { provider: p.id } })).url;
+    } catch (err) { toast(err.message); e.target.disabled = false; }
+  } }, `Sign in with ${p.name}`)), h("span", { class: "muted small" }, "No app password needed.")) : null;
+  if (pendingImportOAuth) {
+    const { handle, error } = pendingImportOAuth;
+    pendingImportOAuth = null;
+    if (error || !handle) {
+      oauthBox.replaceChildren(h("div", { class: "notice warn" }, IMPORT_OAUTH_ERRORS[error] ?? IMPORT_OAUTH_ERRORS.failed));
+    } else {
+      oauthBox.replaceChildren(h("p", { class: "muted" }, "Signed in: reading your folders…"));
+      try {
+        const who = await api("import/oauth/claim", { method: "POST", body: { handle } });
+        const { folders } = await api("import/probe", { method: "POST", body: { oauth: true } });
+        oauthBox.replaceChildren(folderPicker(folders, mailboxSelect, async (choices, mailboxId) => {
+          await api("import/imap", { method: "POST", body: { oauth: true, mailbox_id: mailboxId, folders: choices } });
+          oauthBox.replaceChildren();
+          toast("Copying has started.");
+          await reload(); runImports();
+        }, `Copy ${who.email}`));
+      } catch (err) {
+        oauthBox.replaceChildren(h("div", { class: "notice bad" }, err.message));
+      }
+    }
+  }
 
   // From a file: uploaded in pieces, then copied.
   const fileIn = h("input", { type: "file", name: "file", required: true, accept: ".mbox,.mbx,.eml,application/mbox,message/rfc822" });
@@ -943,10 +995,25 @@ async function importSettings() {
     await reload(); runImports();
   });
 
+  // The mailboxes on this hosting account (cPanel's own email accounts): no password needed.
+  const local = (await api("import/local").catch(() => ({ mailboxes: [] }))).mailboxes;
+  const localPick = h("div");
+  const localSection = local.length ? h("section", {}, h("h3", {}, "From this hosting account"),
+    h("p", { class: "muted small" }, "The email accounts on the hosting where this webmail is installed. They're read straight from the server: no password needed."),
+    h("table", { class: "list" }, local.map((m) => h("tr", {}, h("td", {}, m.address), h("td", {}, `${m.total.toLocaleString()} emails`),
+      h("td", {}, h("button", { class: "btn btn-sm", onclick: () => localPick.replaceChildren(folderPicker(m.folders, mailboxSelect, async (choices, mailboxId) => {
+        await api("import/maildir", { method: "POST", body: { address: m.address, mailbox_id: mailboxId, folders: choices } });
+        localPick.replaceChildren();
+        toast("Copying has started.");
+        await reload(); runImports();
+      }, `Copy ${m.address}`)) }, "Choose folders"))))),
+    localPick) : null;
+
   return h("div", {},
     h("p", { class: "muted" }, "Bring your old email here: everything is copied into your encrypted mailbox, keeping folders, dates, read and starred. Nothing on the old server is changed or deleted."),
-    listBox,
-    h("section", {}, h("h3", {}, "From your old provider (IMAP)"), imapForm, step2),
+    listBox, localSection,
+    h("section", {}, h("h3", {}, "From your old provider"), signIn, oauthBox,
+      signIn ? h("p", { class: "muted small" }, "Or sign in with a password or app password (any provider with IMAP):") : null, imapForm, step2),
     h("section", {}, h("h3", {}, "From a file"), fileForm));
 }
 

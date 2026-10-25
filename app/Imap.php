@@ -70,6 +70,16 @@ final class Imap
         }
     }
 
+    /** Sign in with an OAuth access token (Gmail, Microsoft 365): SASL XOAUTH2. */
+    public function loginXoauth2(string $username, string $accessToken): void
+    {
+        try {
+            $this->command('AUTHENTICATE XOAUTH2 ' . base64_encode("user=$username\x01auth=Bearer $accessToken\x01\x01"));
+        } catch (ImapError $e) {
+            throw new ImapError('The mail server didn\'t accept the sign-in. Sign in again' . ($e->getMessage() ? " (it said: {$e->getMessage()})." : '.'));
+        }
+    }
+
     /** @return array<int, array{name: string, raw: string, attrs: string[], delimiter: string}> */
     public function folders(): array
     {
@@ -229,7 +239,9 @@ final class Imap
                 return $lines;
             }
             if (str_starts_with($line, '+')) {
-                continue; // a continuation we don't need (we send no literals)
+                // We send no literals, so this is a failed sign-in's details (XOAUTH2): an empty line ends it with NO.
+                fwrite($this->socket, "\r\n");
+                continue;
             }
             $entry = ['text' => rtrim($line, "\r\n")];
             // A literal: {n} at the end of the line, then n bytes, then the rest of the response.

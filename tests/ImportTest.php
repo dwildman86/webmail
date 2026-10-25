@@ -81,7 +81,7 @@ final class ImportTest extends TestCase
 
     private function writeMailbox(array $folders): void
     {
-        file_put_contents("{$this->dir}/mailbox.json", json_encode(['user' => 'jane@old.example', 'pass' => 'app-password', 'folders' => $folders]));
+        file_put_contents("{$this->dir}/mailbox.json", json_encode(['user' => 'jane@old.example', 'pass' => 'app-password', 'token' => 'access-fresh', 'folders' => $folders]));
     }
 
     private function login(array $extra = []): array
@@ -242,5 +242,57 @@ final class ImportTest extends TestCase
         $this->importer->appendChunk($this->user, $job['id'], 0, $eml);
         $this->assertSame(['done', 1], [($d = $this->runToEnd($job['id']))['status'], $d['imported']]);
         $this->assertSame('archive', $this->messages()[0]['folder']);
+    }
+
+    public function testAMailboxSignedInWithGoogleRefreshesItsTokenThroughGhostParse(): void
+    {
+        $this->answers['POST /v1/mail-oauth/refresh'] = fn (array $b) => $b['refresh_token'] === 'refresh-good'
+            ? [200, ['access_token' => 'access-fresh', 'expires_in' => 3599]]
+            : [422, ['error' => 'mail_oauth_revoked', 'message' => 'Google no longer allows this access (it was removed or has expired). Sign in again.']];
+        // As claimed from GhostParse an hour ago: the access token has run out.
+        // The provider's server, played by the stand-in.
+        $oauth = Importer::oauthSettings(
+            ['provider' => 'google', 'email' => 'Jane@Old.Example', 'access_token' => 'access-old', 'refresh_token' => 'refresh-good', 'expires_in' => -10]);
+        $oauth['host'] = 'localhost';
+        $oauth['port'] = $this->port;
+        $oauth['security'] = 'none';
+        $folders = $this->importer->probe([], $oauth)['folders'];
+        $this->assertSame('INBOX', $folders[0]['name'], 'signed in with the refreshed token');
+
+        $job = $this->importer->startImap($this->user, $this->mailbox['id'], [], [['raw' => 'INBOX', 'target' => 'inbox']], $oauth);
+        $this->assertSame(['jane@old.example', 'google', true], [$job['username'], $job['provider'], $job['can_check_again']]);
+        $this->assertSame(['done', 2], [($d = $this->runToEnd($job['id']))['status'], $d['imported']]);
+        $this->assertStringContainsString('AUTHENTICATE XOAUTH2 ***', file_get_contents("{$this->dir}/log"));
+        $this->assertStringNotContainsString('access-fresh', file_get_contents("{$this->dir}/log"));
+
+        // The sign-in is removed at Google: checking again stops with the reason.
+        $row = $this->app->db->one('SELECT settings_enc FROM {imports} WHERE id = ?', [$job['id']]);
+        $s = $this->app->crypto->decryptJson($row['settings_enc'], 'imports.settings');
+        $this->assertSame('refresh-good', $s['refresh_token'], 'kept encrypted for checking again');
+        $s['refresh_token'] = 'refresh-revoked';
+        $s['expires_at'] = 0;
+        $this->app->db->run('UPDATE {imports} SET settings_enc = ? WHERE id = ?', [$this->app->crypto->encryptJson($s, 'imports.settings'), $job['id']]);
+        $this->importer->again($this->user, $job['id']);
+        $stopped = $this->importer->step($this->user, $job['id'], 0.0);
+        $this->assertSame('failed', $stopped['status']);
+        $this->assertStringContainsString('Sign in again', $stopped['note']);
+
+        // Forgetting removes the tokens.
+        $this->assertFalse($this->importer->forget($this->user, $job['id'])['can_check_again']);
+        $left = $this->app->crypto->decryptJson($this->app->db->value('SELECT settings_enc FROM {imports} WHERE id = ?', [$job['id']]), 'imports.settings');
+        $this->assertArrayNotHasKey('refresh_token', $left);
+    }
+
+    public function testAWrongTokenIsRefusedCleanly(): void
+    {
+        $this->answers['POST /v1/mail-oauth/refresh'] = fn () => [200, ['access_token' => 'access-wrong', 'expires_in' => 3599]];
+        // The provider's server, played by the stand-in.
+        $oauth = Importer::oauthSettings(
+            ['provider' => 'microsoft', 'email' => 'jane@old.example', 'access_token' => 'x', 'refresh_token' => 'refresh-x', 'expires_in' => -10]);
+        $oauth['host'] = 'localhost';
+        $oauth['port'] = $this->port;
+        $oauth['security'] = 'none';
+        $this->expectExceptionMessage("didn't accept the sign-in");
+        $this->importer->probe([], $oauth);
     }
 }

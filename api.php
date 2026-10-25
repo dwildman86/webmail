@@ -201,11 +201,42 @@ try {
         // Importing email from an old mailbox (IMAP) or a file (.mbox, .eml). The page keeps asking for steps while open.
         case 'GET imports':
             Http::json(['imports' => (new Importer($app))->list($user), 'chunk_bytes' => Importer::CHUNK_BYTES]);
+        case 'GET import/local':
+            Http::json(['mailboxes' => (new Importer($app))->localMailboxes()]);
+        case 'POST import/maildir':
+            $in = Http::body();
+            Http::json((new Importer($app))->startMaildir($user, (int) ($in['mailbox_id'] ?? 0), (string) ($in['address'] ?? ''), (array) ($in['folders'] ?? [])), 201);
         case 'POST import/probe':
-            Http::json((new Importer($app))->probe(Http::body()));
+            $in = Http::body();
+            Http::json((new Importer($app))->probe($in, !empty($in['oauth']) ? importOAuth($app) : null));
         case 'POST import/imap':
             $in = Http::body();
-            Http::json((new Importer($app))->startImap($user, (int) ($in['mailbox_id'] ?? 0), $in, (array) ($in['folders'] ?? [])), 201);
+            $oauth = !empty($in['oauth']) ? importOAuth($app) : null;
+            $job = (new Importer($app))->startImap($user, (int) ($in['mailbox_id'] ?? 0), $in, (array) ($in['folders'] ?? []), $oauth);
+            unset($_SESSION['import_oauth']); // the import keeps it now (encrypted), until it's forgotten
+            Http::json($job, 201);
+        // Sign in with Google / Microsoft (GhostParse brokers it): providers, start, then claim the handle it sends back.
+        case 'GET import/oauth/providers':
+            try {
+                Http::json(['providers' => $app->gp->mailOAuthProviders()]);
+            } catch (\Webmail\GhostParseError) {
+                Http::json(['providers' => []]);
+            }
+        case 'POST import/oauth/start':
+            try {
+                Http::json(['url' => $app->gp->mailOAuthStart((string) (Http::body()['provider'] ?? ''), $app->baseUrl() . '/')]);
+            } catch (\Webmail\GhostParseError $e) {
+                throw new HttpError($e->status === 404 ? 404 : 502, $e->getMessage(), 'oauth');
+            }
+        case 'POST import/oauth/claim':
+            try {
+                $claim = $app->gp->mailOAuthClaim((string) (Http::body()['handle'] ?? ''));
+            } catch (\Webmail\GhostParseError $e) {
+                throw new HttpError(422, $e->getMessage(), 'oauth');
+            }
+            $settings = Importer::oauthSettings($claim);
+            $_SESSION['import_oauth'] = $app->crypto->encryptJson($settings, 'session.import_oauth');
+            Http::json(['provider' => $settings['provider'], 'email' => $settings['username']]);
         case 'POST import/file':
             $in = Http::body();
             Http::json((new Importer($app))->startFile($user, (int) ($in['mailbox_id'] ?? 0), (string) ($in['filename'] ?? 'mail.mbox'), (int) ($in['size'] ?? 0), (string) ($in['folder'] ?? 'archive')), 201);
@@ -261,6 +292,16 @@ try {
 }
 
 /** What a session that has done its password still needs: ['mfa' => 'verify' | 'enrol', …], or nothing. */
+/** The mailbox just signed in with Google or Microsoft, waiting in this session to be imported. */
+function importOAuth(App $app): array
+{
+    $s = isset($_SESSION['import_oauth']) ? $app->crypto->decryptJson($_SESSION['import_oauth'], 'session.import_oauth') : null;
+    if (!is_array($s)) {
+        throw new HttpError(409, 'Sign in with Google or Microsoft again: that sign-in has gone.', 'oauth');
+    }
+    return $s;
+}
+
 function secondStep(Auth $auth, Mfa $mfa): array
 {
     $p = $auth->pending();

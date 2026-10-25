@@ -19,7 +19,7 @@ while ($c = @stream_socket_accept($server, -1)) {
     $out('* OK fake IMAP ready');
     while (($line = fgets($c)) !== false) {
         $line = rtrim($line, "\r\n");
-        file_put_contents($logFile, preg_replace('/^(\S+ (LOGIN|AUTHENTICATE PLAIN)) .*/i', '$1 ***', $line) . "\n", FILE_APPEND);
+        file_put_contents($logFile, preg_replace('/^(\S+ (LOGIN|AUTHENTICATE PLAIN|AUTHENTICATE XOAUTH2)) .*/i', '$1 ***', $line) . "\n", FILE_APPEND);
         [$tag, $rest] = explode(' ', $line, 2) + [1 => ''];
         $cmd = strtoupper(strtok($rest, ' '));
         if ($cmd === 'UID') {
@@ -32,6 +32,19 @@ while ($c = @stream_socket_accept($server, -1)) {
                 $ok();
                 break;
             case 'AUTHENTICATE':
+                if (stripos($rest, 'AUTHENTICATE XOAUTH2 ') === 0) {
+                    // user=<email>^Aauth=Bearer <token>^A^A; a bad token gets a continuation with the error, then NO.
+                    $sasl = base64_decode(substr($rest, 21));
+                    if ($sasl === "user={$box['user']}\x01auth=Bearer " . ($box['token'] ?? '') . "\x01\x01") {
+                        $authed = true;
+                        $ok();
+                    } else {
+                        $out('+ ' . base64_encode('{"status":"400","schemes":"Bearer","scope":"https://mail.google.com/"}'));
+                        fgets($c);
+                        $out("$tag NO [AUTHENTICATIONFAILED] Invalid credentials (Failure)");
+                    }
+                    break;
+                }
                 [, , $b64] = explode(' ', $rest) + [2 => ''];
                 [, $u, $p] = explode("\0", base64_decode($b64)) + [1 => '', 2 => ''];
                 ($authed = ($u === $box['user'] && $p === $box['pass'])) ? $ok() : $out("$tag NO [AUTHENTICATIONFAILED] Invalid credentials");

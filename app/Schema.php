@@ -185,6 +185,10 @@ final class Schema
                     FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
+            // Importing straight from this hosting account's own mailboxes (cPanel's Maildir folders).
+            5 => [
+                "ALTER TABLE {imports} MODIFY kind ENUM('imap','file','maildir') NOT NULL",
+            ],
         ];
     }
 
