@@ -12,6 +12,7 @@ use Webmail\Auth;
 use Webmail\Config;
 use Webmail\Http;
 use Webmail\HttpError;
+use Webmail\Importer;
 use Webmail\Mailstore;
 use Webmail\Mfa;
 use Webmail\Signatures;
@@ -197,6 +198,30 @@ try {
             header("Content-Security-Policy: default-src 'none'; sandbox");
             echo $vcf;
             exit;
+        // Importing email from an old mailbox (IMAP) or a file (.mbox, .eml). The page keeps asking for steps while open.
+        case 'GET imports':
+            Http::json(['imports' => (new Importer($app))->list($user), 'chunk_bytes' => Importer::CHUNK_BYTES]);
+        case 'POST import/probe':
+            Http::json((new Importer($app))->probe(Http::body()));
+        case 'POST import/imap':
+            $in = Http::body();
+            Http::json((new Importer($app))->startImap($user, (int) ($in['mailbox_id'] ?? 0), $in, (array) ($in['folders'] ?? [])), 201);
+        case 'POST import/file':
+            $in = Http::body();
+            Http::json((new Importer($app))->startFile($user, (int) ($in['mailbox_id'] ?? 0), (string) ($in['filename'] ?? 'mail.mbox'), (int) ($in['size'] ?? 0), (string) ($in['folder'] ?? 'archive')), 201);
+        case 'POST import/chunk':
+            // The file's bytes, as the request body (not JSON), in order.
+            Http::json((new Importer($app))->appendChunk($user, $int('id'), $int('offset'), (string) file_get_contents('php://input', false, null, 0, Importer::CHUNK_BYTES + 1)));
+        case 'POST import/step':
+            session_write_close(); // the step takes ~20 seconds: don't hold the session for the rest of the app
+            Http::json((new Importer($app))->step($user, (int) (Http::body()['id'] ?? 0)));
+        case 'POST import/again':
+            Http::json((new Importer($app))->again($user, (int) (Http::body()['id'] ?? 0)));
+        case 'POST import/forget':
+            Http::json((new Importer($app))->forget($user, (int) (Http::body()['id'] ?? 0)));
+        case 'POST import/delete':
+            (new Importer($app))->delete($user, (int) (Http::body()['id'] ?? 0));
+            Http::json(['ok' => true]);
         case 'GET mailbox/signature':
             // The From name, position, signature and the domain's disclaimer, from GhostParse.
             Http::json((new Signatures($app))->get($store->mailbox($user['id'], $int('id')), $user['role'] === 'admin'));

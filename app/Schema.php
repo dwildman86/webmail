@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -160,6 +160,29 @@ final class Schema
                     created_at DATETIME NOT NULL,
                     updated_at DATETIME NOT NULL,
                     UNIQUE KEY book_email (owner_id, email_bidx)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Importing email from an old mailbox (IMAP) or a file (.mbox, .eml): where each import has got to. The
+            // old server's sign-in is encrypted and can be forgotten; state holds each folder's last copied UID.
+            4 => [
+                "CREATE TABLE IF NOT EXISTS {imports} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT UNSIGNED NOT NULL,
+                    mailbox_id INT UNSIGNED NOT NULL,
+                    kind ENUM('imap','file') NOT NULL,
+                    status ENUM('uploading','running','done','failed') NOT NULL,
+                    settings_enc TEXT NULL,
+                    state_enc MEDIUMTEXT NOT NULL,
+                    imported INT UNSIGNED NOT NULL DEFAULT 0,
+                    skipped INT UNSIGNED NOT NULL DEFAULT 0,
+                    failed INT UNSIGNED NOT NULL DEFAULT 0,
+                    note_enc TEXT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    finished_at DATETIME NULL,
+                    KEY user_imports (user_id),
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

@@ -40,12 +40,12 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
         $gp = new GhostParse('https://api.ghostparse.test', 'ek_live_test', function (string $method, string $url, array $headers, ?string $payload) {
             $path = parse_url($url, PHP_URL_PATH);
             $body = $payload === null ? null : json_decode($payload, true);
-            $this->requests[] = ['method' => $method, 'path' => $path, 'body' => $body, 'headers' => $headers];
+            $this->requests[] = ['method' => $method, 'path' => $path, 'body' => $body, 'headers' => $headers, 'raw' => $body === null ? $payload : null];
             $answer = $this->answers["$method $path"] ?? null;
             if (!$answer) {
                 return [404, json_encode(['error' => 'not_found', 'message' => "No answer for $method $path"])];
             }
-            [$status, $json] = $answer($body ?? []);
+            [$status, $json] = $answer($body ?? [], $payload);
             return [$status, json_encode($json)];
         });
         $this->app = new App($config, new Db($this->config['db'], 'wm_'), $gp);

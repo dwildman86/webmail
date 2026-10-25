@@ -15,11 +15,14 @@ final class GhostParse
     }
 
     /** @return array decoded JSON */
-    public function request(string $method, string $path, ?array $body = null): array
+    public function request(string $method, string $path, ?array $body = null, ?string $raw = null): array
     {
         $headers = ['Authorization: Bearer ' . $this->apiKey, 'Accept: application/json', 'User-Agent: ghostparse-webmail/' . App::VERSION];
         $payload = null;
-        if ($body !== null) {
+        if ($raw !== null) {
+            $payload = $raw;
+            $headers[] = 'Content-Type: message/rfc822';
+        } elseif ($body !== null) {
             $payload = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
             $headers[] = 'Content-Type: application/json';
         }
@@ -88,6 +91,15 @@ final class GhostParse
     public function updateAddress(string $domainId, string $addressId, array $fields): array
     {
         return $this->request('PATCH', '/v1/domains/' . rawurlencode($domainId) . '/addresses/' . rawurlencode($addressId), $fields);
+    }
+
+    /**
+     * POST /v1/parse: an old email (raw MIME) as the same JSON as a received one, for importing. Not stored or counted.
+     * @return array the email's data
+     */
+    public function parse(string $raw): array
+    {
+        return $this->request('POST', '/v1/parse', null, $raw)['data'] ?? [];
     }
 
     /** POST /v1/emails: returns id, message_id, thread_id, accepted, suppressed. */

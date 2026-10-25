@@ -164,6 +164,21 @@ final class Mailstore
         return 'inbox';
     }
 
+    /**
+     * Store a message imported from an old mailbox (as GhostParse's parse returns it). $key identifies it in this
+     * mailbox (from its Message-ID), so importing again, or the same message in two folders, keeps one copy.
+     * null when it's there already.
+     */
+    public function storeImported(int $mailboxId, array $data, string $folder, bool $read, bool $starred, string $key): ?int
+    {
+        $data['id'] = $key;
+        $id = $this->storeOne($mailboxId, $data, $folder, $read);
+        if ($id && $starred) {
+            $this->app->db->run('UPDATE {messages} SET is_starred = 1 WHERE id = ?', [$id]);
+        }
+        return $id;
+    }
+
     /** Store one message (received or sent) in a mailbox. null when it's there already. */
     private function storeOne(int $mailboxId, array $data, string $folder, bool $read = false): ?int
     {

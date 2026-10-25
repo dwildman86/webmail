@@ -68,6 +68,23 @@ php install-cli.php --db-name=acme_mail --db-user=acme_mail --db-pass='…' \
   command line, and `.htaccess` blocks it too.
 - In PHP code, `Webmail\Installer::unattended([...])` does the same.
 
+## Moving from your old email
+
+Under **Settings → Import email**, copy your old email into the webmail, keeping folders, dates, and read and starred
+marks.
+
+- **From your old provider (IMAP):** choose it (Gmail, Outlook.com, Yahoo, iCloud, your web host and others), then
+  sign in. Gmail, Yahoo and iCloud need an app password. Choose where each folder goes; Trash, Spam and Gmail's All
+  Mail are left out unless you choose them. Nothing on the old server is changed or deleted: it's read-only.
+- **From a file:** an `.mbox` (Google Takeout, Thunderbird, Apple Mail) or a single `.eml`, uploaded in pieces. Gmail
+  labels decide each message's folder.
+- It runs while the webmail is open, about 20 seconds at a time, and carries on where it stopped if you close it.
+- Each message is read by GhostParse's parser, so it looks and searches like new mail and joins its conversation. It
+  isn't stored at GhostParse and doesn't count towards your plan.
+- **Moving your domain:** import, then point the domain's mail at GhostParse. A day later, choose **Check for new
+  mail** to copy anything that reached the old mailbox in the meantime (only new messages are fetched), then
+  **Forget the password**.
+
 ## Using it
 
 - **Mailboxes and users**: under **Settings → Connect addresses**, an administrator turns more GhostParse addresses into mailboxes. Under **Settings → Users**, they add people and choose which mailboxes each person can read and send from. A shared mailbox, such as support@, can belong to several people.

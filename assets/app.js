@@ -150,6 +150,8 @@ async function start() {
     renderShell();
     await loadList();
     window.Notifications?.afterSignIn?.(s);
+    runImports().catch(() => {}); // an import left running carries on
+
   } catch (err) {
     if (err.status === 401 && err.data?.mfa) { csrf = err.data.csrf || csrf; showSecondStep(err.data); }
     else if (err.status === 401) showLogin();
@@ -759,7 +761,7 @@ function suggest(input, contactsPromise) {
 async function openSettings(tab = "account") {
   document.querySelector(".overlay.settings-overlay")?.remove();
   const body = h("div", { class: "tab-body" });
-  const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["security", "Sign-in & alerts"],
+  const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["import", "Import email"], ["security", "Sign-in & alerts"],
     ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-mailboxes", "Connect addresses"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
@@ -784,6 +786,168 @@ function formFor(fields, label, onSubmit) {
     try { await onSubmit(Object.fromEntries(new FormData(e.target))); } catch (err) { error.textContent = err.message; }
     button.disabled = false;
   } }, fields, button, error);
+}
+
+// ------------------------------------------------------------------------------------------------ importing email
+
+/** Common providers' IMAP servers, and what they need instead of the normal password. */
+const IMPORT_PROVIDERS = [
+  ["Gmail or Google Workspace", "imap.gmail.com", "Gmail needs an app password: turn on 2-Step Verification, then make one at myaccount.google.com/apppasswords."],
+  ["Outlook.com or Hotmail", "outlook.office365.com", "If Microsoft won't accept the password, export your mail to an .mbox file (Thunderbird can) and import the file below."],
+  ["Yahoo Mail", "imap.mail.yahoo.com", "Yahoo needs an app password: Account security → Generate app password."],
+  ["iCloud Mail", "imap.mail.me.com", "iCloud needs an app-specific password: appleid.apple.com → Sign-In and Security."],
+  ["AOL", "imap.aol.com", "AOL needs an app password, made in your account's security settings."],
+  ["Fastmail", "imap.fastmail.com", "Fastmail needs an app password: Settings → Privacy & Security."],
+  ["Zoho Mail", "imap.zoho.com", "For an EU Zoho account, use imap.zoho.eu."],
+  ["IONOS", "imap.ionos.co.uk", ""],
+  ["GoDaddy", "imap.secureserver.net", ""],
+  ["Your web hosting (cPanel and others)", "", "Usually mail.yourdomain.com: your host's email settings page gives it. Use the mailbox's full email address and password."],
+  ["Another provider", "", "Your provider's help pages give the IMAP server's name."],
+];
+const IMPORT_TARGETS = [["inbox", "Inbox"], ["sent", "Sent"], ["drafts", "Drafts"], ["archive", "Archive"], ["spam", "Spam"], ["trash", "Trash"], ["", "Don't copy"]];
+
+/** Imports carry on while the webmail is open: one step at a time, ~20 seconds each. */
+const importRunner = { running: false, listeners: new Set(), imports: [] };
+function importsChanged(list) {
+  importRunner.imports = list;
+  importRunner.listeners.forEach((fn) => fn(list));
+}
+async function runImports() {
+  if (importRunner.running) return;
+  importRunner.running = true;
+  try {
+    while (true) {
+      const { imports } = await api("imports");
+      importsChanged(imports);
+      const job = imports.find((i) => i.status === "running");
+      if (!job) break;
+      const before = job.imported;
+      const r = await api("import/step", { method: "POST", body: { id: job.id } }).catch((err) => ({ ...job, note: err.message }));
+      importsChanged(importRunner.imports.map((i) => (i.id === r.id ? r : i)));
+      if (r.status === "done") {
+        toast(`Import finished: ${r.imported.toLocaleString()} email${r.imported === 1 ? "" : "s"} copied.`);
+        refresh();
+      } else if (r.imported > before) {
+        refresh();
+      }
+      // Waiting on something (the old server, GhostParse, another tab): try again in a minute.
+      if (r.note || r.busy) await new Promise((res) => setTimeout(res, 60000));
+    }
+  } finally {
+    importRunner.running = false;
+  }
+}
+
+function importRow(job, reload) {
+  const what = job.kind === "imap" ? `${job.username} on ${job.host}` : job.filename;
+  const mailbox = state.mailboxes.find((m) => m.id === job.mailbox_id)?.address ?? "";
+  const counts = `${job.imported.toLocaleString()} copied` + (job.skipped ? `, ${job.skipped.toLocaleString()} already here or too large` : "") + (job.failed ? `, ${job.failed} unreadable` : "");
+  const progress = job.status === "uploading"
+    ? `Uploading: ${Math.round((job.received / Math.max(job.size, 1)) * 100)}%`
+    : job.status === "running" ? (job.kind === "imap"
+      ? `Copying ${job.folders.find((f) => !f.done)?.name ?? ""}… ${counts}`
+      : `Copying… ${Math.round((job.offset / Math.max(job.size, 1)) * 100)}%, ${counts}`)
+    : job.status === "done" ? `Done: ${counts}` : `Stopped: ${job.note ?? ""}`;
+  const act = (label, action, cls = "btn btn-sm") => h("button", { class: cls, onclick: async () => {
+    await api(`import/${action}`, { method: "POST", body: { id: job.id } }).catch((err) => toast(err.message));
+    reload(); runImports();
+  } }, label);
+  return h("div", { class: "import-row" },
+    h("div", {}, h("strong", {}, what), h("span", { class: "muted small" }, ` → ${mailbox}`)),
+    h("div", { class: "small" }, progress),
+    job.note && job.status !== "failed" ? h("div", { class: "muted small" }, job.note) : null,
+    job.status === "running" && job.kind === "imap" ? h("div", { class: "muted small" }, "It carries on while the webmail is open. You can keep using it, or close it and come back.") : null,
+    h("div", { class: "row" },
+      job.kind === "imap" && job.status === "done" && job.can_check_again ? act("Check for new mail", "again", "btn btn-sm btn-primary") : null,
+      job.kind === "imap" && job.can_check_again && job.status === "done" ? act("Forget the password", "forget") : null,
+      job.status !== "running" && job.status !== "uploading" ? act("Remove from list", "delete") : null),
+    job.kind === "imap" && job.status === "done" && job.can_check_again
+      ? h("p", { class: "muted small" }, "After your domain's email has moved here, choose Check for new mail once to copy anything that reached the old mailbox in the meantime. Then forget the password.") : null);
+}
+
+async function importSettings() {
+  if (!state.mailboxes.length) return h("p", { class: "muted" }, "You don't have a mailbox to import into yet.");
+  const listBox = h("div", { class: "imports" });
+  const render = (list) => listBox.replaceChildren(...(list.length ? [h("h3", {}, "Your imports"), ...list.map((j) => importRow(j, reload))] : []));
+  const reload = async () => render((await api("imports")).imports);
+  importRunner.listeners.clear();
+  importRunner.listeners.add(render);
+  await reload();
+  const mailboxSelect = () => h("label", { class: "field", hidden: state.mailboxes.length < 2 }, "Into", h("select", { name: "mailbox_id" },
+    state.mailboxes.map((m) => h("option", { value: String(m.id) }, m.address))));
+
+  // From an IMAP server: sign in, choose folders, copy.
+  const hint = h("p", { class: "muted small" });
+  const host = h("input", { name: "host", required: true, placeholder: "imap.example.com", autocomplete: "off" });
+  const provider = h("select", { onchange: () => {
+    const [, server, tip] = IMPORT_PROVIDERS[provider.value];
+    host.value = server; hint.textContent = tip;
+  } }, IMPORT_PROVIDERS.map(([name], i) => h("option", { value: String(i) }, name)));
+  provider.value = "0"; host.value = IMPORT_PROVIDERS[0][1]; hint.textContent = IMPORT_PROVIDERS[0][2];
+  const step2 = h("div");
+  let login = null;
+  const imapForm = formFor([
+    h("label", { class: "field" }, "Your old provider", provider), hint,
+    h("label", { class: "field" }, "IMAP server", host),
+    h("div", { class: "row" },
+      h("label", { class: "field" }, "Security", h("select", { name: "security" }, h("option", { value: "ssl" }, "SSL/TLS (port 993)"), h("option", { value: "starttls" }, "STARTTLS (port 143)")))),
+    h("label", { class: "field" }, "Email address or username", h("input", { name: "username", required: true, autocomplete: "off" })),
+    h("label", { class: "field" }, "Password (or app password)", h("input", { name: "password", type: "password", required: true, autocomplete: "off" })),
+  ], "Connect", async (v) => {
+    login = { host: v.host.trim(), security: v.security, port: v.security === "starttls" ? 143 : 993, username: v.username.trim(), password: v.password };
+    step2.replaceChildren(h("p", { class: "muted" }, "Signing in and reading the folders…"));
+    const { folders } = await api("import/probe", { method: "POST", body: login }).catch((err) => { step2.replaceChildren(); throw err; });
+    const rows = folders.map((f) => ({ f, select: h("select", { "aria-label": `Copy ${f.name} into` }, IMPORT_TARGETS.map(([v, l]) => h("option", { value: v, selected: v === (f.target ?? "") }, l))) }));
+    const total = () => rows.reduce((n, r) => n + (r.select.value ? (r.f.count ?? 0) : 0), 0);
+    const summary = h("p", { class: "small" });
+    const update = () => { summary.textContent = `${total().toLocaleString()} emails to copy. Gmail's All Mail and Starred, Trash and Spam are left out unless you choose them.`; };
+    rows.forEach((r) => r.select.addEventListener("change", update));
+    update();
+    step2.replaceChildren(h("h4", {}, "Choose what to copy"),
+      h("table", { class: "list" }, h("tr", {}, h("th", {}, "Folder on the old server"), h("th", {}, "Emails"), h("th", {}, "Copy into")),
+        rows.map((r) => h("tr", {}, h("td", {}, r.f.name), h("td", {}, r.f.count ?? "?"), h("td", {}, r.select)))),
+      summary,
+      formFor([mailboxSelect()], "Start copying", async (w) => {
+        await api("import/imap", { method: "POST", body: { ...login, mailbox_id: Number(w.mailbox_id || state.mailboxes[0].id), folders: rows.map((r) => ({ raw: r.f.raw, target: r.select.value || null })) } });
+        step2.replaceChildren(); imapForm.reset(); login = null;
+        host.value = IMPORT_PROVIDERS[provider.value][1];
+        toast("Copying has started.");
+        await reload(); runImports();
+      }));
+  });
+
+  // From a file: uploaded in pieces, then copied.
+  const fileIn = h("input", { type: "file", name: "file", required: true, accept: ".mbox,.mbx,.eml,application/mbox,message/rfc822" });
+  const upload = h("div", { class: "small" });
+  const fileForm = formFor([
+    h("label", { class: "field" }, "File", fileIn, h("small", { class: "muted" }, "An .mbox file (Google Takeout, Thunderbird, Apple Mail) or a single .eml. Unzip a Google Takeout download first.")),
+    h("label", { class: "field" }, "Put emails without a folder in", h("select", { name: "folder" }, h("option", { value: "archive" }, "Archive"), h("option", { value: "inbox" }, "Inbox"), h("option", { value: "sent" }, "Sent"))),
+    mailboxSelect(), upload,
+  ], "Upload and import", async (v) => {
+    const file = fileIn.files[0];
+    if (!file) throw new Error("Choose a file.");
+    let job = await api("import/file", { method: "POST", body: { mailbox_id: Number(v.mailbox_id || state.mailboxes[0].id), filename: file.name, size: file.size, folder: v.folder } });
+    const { chunk_bytes: chunk } = await api("imports");
+    while (job.status === "uploading") {
+      upload.textContent = `Uploading… ${Math.round((job.received / file.size) * 100)}%`;
+      const res = await fetch(`api.php?${new URLSearchParams({ a: "import/chunk", id: String(job.id), offset: String(job.received) })}`, {
+        method: "POST", credentials: "same-origin", headers: { "X-CSRF-Token": csrf, "Content-Type": "application/octet-stream" },
+        body: file.slice(job.received, job.received + chunk),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || `Upload stopped (error ${res.status}). Choose the file again to carry on.`);
+      job = data;
+    }
+    upload.textContent = "";
+    fileForm.reset();
+    await reload(); runImports();
+  });
+
+  return h("div", {},
+    h("p", { class: "muted" }, "Bring your old email here: everything is copied into your encrypted mailbox, keeping folders, dates, read and starred. Nothing on the old server is changed or deleted."),
+    listBox,
+    h("section", {}, h("h3", {}, "From your old provider (IMAP)"), imapForm, step2),
+    h("section", {}, h("h3", {}, "From a file"), fileForm));
 }
 
 /** Each mailbox's signature on GhostParse, loaded once per mailbox while the app is open. */
@@ -874,6 +1038,7 @@ async function twoStepSettings() {
 }
 
 const SETTINGS = {
+  import: () => importSettings(),
   async account() {
     return h("div", {},
       h("section", {}, h("h3", {}, "You"), h("p", {}, state.user.name, " · ", h("span", { class: "muted" }, state.user.email), " · ", state.user.role === "admin" ? "Administrator" : "User")),
