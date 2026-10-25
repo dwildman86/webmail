@@ -9,13 +9,13 @@ VERSION=$(sed -n "s/.*const VERSION = '\([^']*\)'.*/\1/p" app/App.php)
 grep -q "const VERSION = \"wm-$VERSION\"" sw.js || { echo "sw.js VERSION isn't wm-$VERSION" >&2; exit 1; }
 grep -q "v=$VERSION\"" sw.js || { echo "sw.js caches assets for another version than $VERSION" >&2; exit 1; }
 
-for f in app/*.php api.php index.php install.php manifest.php webhook.php; do php -l "$f" >/dev/null; done
+for f in app/*.php api.php index.php install.php install-cli.php manifest.php webhook.php; do php -l "$f" >/dev/null; done
 
 OUT="dist/webmail-$VERSION.zip"
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/webmail" dist
-cp -R app assets storage api.php index.php install.php manifest.php webhook.php sw.js .htaccess .user.ini README.md "$STAGE/webmail/"
+cp -R app assets storage api.php index.php install.php install-cli.php manifest.php webhook.php sw.js .htaccess .user.ini README.md "$STAGE/webmail/"
 # storage/ holds only its guard files in the zip.
 find "$STAGE/webmail/storage" -mindepth 1 ! -name .htaccess ! -name index.html -exec rm -rf {} +
 rm -f "$OUT"

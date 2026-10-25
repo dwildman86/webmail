@@ -5,17 +5,13 @@ declare(strict_types=1);
 
 require __DIR__ . '/app/bootstrap.php';
 
-use Webmail\Admin;
-use Webmail\App;
-use Webmail\Auth;
 use Webmail\Config;
 use Webmail\Crypto;
 use Webmail\Db;
 use Webmail\GhostParse;
-use Webmail\GhostParseError;
 use Webmail\Http;
-use Webmail\Mailstore;
-use Webmail\Schema;
+use Webmail\InstallError;
+use Webmail\Installer;
 
 Http::securityHeaders();
 header('Cache-Control: no-store');
@@ -92,16 +88,7 @@ $detectedUrl = (Http::isHttps() ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HO
 
 // ------------------------------------------------------------------------------------------------ 1. requirements
 if ($step === 'check') {
-    $dir = __DIR__;
-    $checks = [
-        ['PHP 8.1 or newer', PHP_VERSION_ID >= 80100, 'This server has PHP ' . PHP_VERSION . '. Choose PHP 8.1+ in your hosting control panel.'],
-        ['Sodium (encryption)', extension_loaded('sodium'), 'Turn on the "sodium" PHP extension in your hosting control panel.'],
-        ['PDO MySQL', extension_loaded('pdo_mysql'), 'Turn on the "pdo_mysql" PHP extension.'],
-        ['cURL', extension_loaded('curl'), 'Turn on the "curl" PHP extension.'],
-        ['mbstring', extension_loaded('mbstring'), 'Turn on the "mbstring" PHP extension.'],
-        ['OpenSSL', extension_loaded('openssl'), 'Turn on the "openssl" PHP extension.'],
-        ['config.php can be written', is_writable($dir) || (is_file("$dir/config.php") && is_writable("$dir/config.php")), "The folder isn't writable: you'll be shown config.php to upload yourself."],
-    ];
+    $checks = Installer::requirements(__DIR__);
     if ($fromPreset) {
         try {
             new Db($s['db'], $s['db']['prefix']);
@@ -129,21 +116,13 @@ if ($step === 'db' || ($step === 'ghostparse' && $fromPreset)) {
         exit;
     }
     if ($post) {
-        $db = ['host' => trim($_POST['host'] ?? 'localhost'), 'port' => (int) ($_POST['port'] ?? 3306), 'name' => trim($_POST['name'] ?? ''),
-            'user' => trim($_POST['user'] ?? ''), 'pass' => (string) ($_POST['pass'] ?? ''), 'prefix' => preg_replace('/\W/', '', $_POST['prefix'] ?? 'wm_') ?: 'wm_'];
-        $s['form'] = array_merge($s['form'] ?? [], array_diff_key($db, ['pass' => 1]));
+        $s['form'] = array_merge($s['form'] ?? [], array_diff_key($_POST, ['pass' => 1, 'csrf' => 1]));
         try {
-            $conn = new Db($db, $db['prefix']);
-            $exists = $conn->value('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ? AND table_name = ?', [$db['name'], $db['prefix'] . 'messages']);
-            if ($exists) {
-                $error = "This database already has webmail tables with the prefix {$db['prefix']}. Use another prefix or database.";
-            } else {
-                $s['db'] = $db;
-                header('Location: install.php?step=ghostparse');
-                exit;
-            }
-        } catch (\PDOException $ex) {
-            $error = "Can't connect to the database: " . preg_replace('/^SQLSTATE\[\w+\] \[\d+\] /', '', $ex->getMessage());
+            $s['db'] = Installer::checkDatabase($_POST);
+            header('Location: install.php?step=ghostparse');
+            exit;
+        } catch (InstallError $ex) {
+            $error = $ex->getMessage();
         }
     }
     page('Database', '<h1>Your database</h1><p>Create an empty MySQL or MariaDB database and a user for it in your hosting control panel, then enter them here.</p>'
@@ -165,28 +144,15 @@ if ($step === 'ghostparse') {
         exit;
     }
     if ($post) {
-        $gp = ['api_url' => rtrim(trim($_POST['api_url'] ?? ''), '/'), 'api_key' => trim($_POST['api_key'] ?? ''), 'webhook_secret' => trim($_POST['webhook_secret'] ?? '')];
-        $s['form'] = array_merge($s['form'] ?? [], ['api_url' => $gp['api_url']]);
-        if (!preg_match('#^https?://#', $gp['api_url'])) {
-            $error = 'Enter the GhostParse address, like https://ghostparse.com';
-        } elseif (!preg_match('/^whsec_[A-Za-z0-9+\/=]{32,}$/', $gp['webhook_secret'])) {
-            $error = 'The signing secret starts with whsec_ (Dashboard → Inbound webhook → Signing secret).';
-        } else {
-            try {
-                $me = (new GhostParse($gp['api_url'], $gp['api_key']))->me();
-                $scopes = $me['api_key']['scopes'] ?? [];
-                $missing = array_diff(['send', 'domains'], $scopes);
-                if ($missing) {
-                    $error = 'This API key needs the ' . implode(' and ', $missing) . ' permission' . (count($missing) > 1 ? 's' : '') . '. Create a key with Send and Domains ticked.';
-                } else {
-                    $s['gp'] = $gp;
-                    $s['account'] = $me['account']['name'] ?? '';
-                    header('Location: install.php?step=admin');
-                    exit;
-                }
-            } catch (GhostParseError $ex) {
-                $error = $ex->status === 401 ? 'GhostParse didn\'t accept that API key.' : $ex->getMessage();
-            }
+        $s['form'] = array_merge($s['form'] ?? [], ['api_url' => rtrim(trim((string) ($_POST['api_url'] ?? '')), '/')]);
+        try {
+            $checked = Installer::checkGhostParse($_POST);
+            $s['gp'] = $checked['gp'];
+            $s['account'] = $checked['account'];
+            header('Location: install.php?step=admin');
+            exit;
+        } catch (InstallError $ex) {
+            $error = $ex->getMessage();
         }
     }
     page('GhostParse', '<h1>Connect GhostParse</h1><p>The webmail receives and sends through your GhostParse account. In the GhostParse dashboard:</p>'
@@ -207,21 +173,21 @@ if ($step === 'admin') {
         exit;
     }
     if ($post) {
-        $a = ['name' => trim($_POST['admin_name'] ?? ''), 'email' => trim($_POST['admin_email'] ?? ''), 'password' => (string) ($_POST['password'] ?? ''),
-            'app_name' => trim($_POST['app_name'] ?? '') ?: 'Webmail', 'base_url' => rtrim(trim($_POST['base_url'] ?? ''), '/')];
-        $s['form'] = array_merge($s['form'] ?? [], ['admin_name' => $a['name'], 'admin_email' => $a['email'], 'app_name' => $a['app_name'], 'base_url' => $a['base_url']]);
-        if (!filter_var($a['email'], FILTER_VALIDATE_EMAIL)) {
-            $error = 'Enter a valid email address to sign in with.';
-        } elseif (mb_strlen($a['password']) < 10) {
-            $error = 'Use a password of at least 10 characters.';
-        } elseif ($a['password'] !== ($_POST['password2'] ?? '')) {
-            $error = "The passwords don't match.";
-        } elseif (!preg_match('#^https?://[^\s]+$#', $a['base_url'])) {
-            $error = 'Enter the address this webmail is at.';
-        } else {
-            $s['admin'] = $a;
+        $s['form'] = array_merge($s['form'] ?? [], ['admin_name' => trim((string) ($_POST['admin_name'] ?? '')), 'admin_email' => trim((string) ($_POST['admin_email'] ?? '')),
+            'app_name' => trim((string) ($_POST['app_name'] ?? '')), 'base_url' => trim((string) ($_POST['base_url'] ?? ''))]);
+        try {
+            if (trim((string) ($_POST['admin_name'] ?? '')) === '') {
+                throw new InstallError('Enter your name.');
+            }
+            if (($_POST['password'] ?? '') !== ($_POST['password2'] ?? '')) {
+                throw new InstallError("The passwords don't match.");
+            }
+            $s['admin'] = Installer::checkAdmin(['name' => $_POST['admin_name'] ?? '', 'email' => $_POST['admin_email'] ?? '', 'password' => $_POST['password'] ?? '',
+                'app_name' => $_POST['app_name'] ?? '', 'base_url' => $_POST['base_url'] ?? '']);
             header('Location: install.php?step=mailboxes');
             exit;
+        } catch (InstallError $ex) {
+            $error = $ex->getMessage();
         }
     }
     page('Administrator', '<h1>Your administrator account</h1>'
@@ -243,58 +209,21 @@ if ($step === 'mailboxes') {
         header('Location: install.php?step=admin');
         exit;
     }
-    $gp = new GhostParse($s['gp']['api_url'], $s['gp']['api_key']);
     try {
-        $addresses = [];
-        foreach ($gp->domains() as $d) {
-            foreach ($d['addresses'] ?? [] as $a) {
-                if (empty($a['is_pattern'])) {
-                    $addresses[] = ['address' => $a['address'], 'note' => ($d['inbound_ready'] ?? false) ? '' : 'domain not receiving yet', 'webhook' => $a['webhook_url'] ?? null];
-                }
-            }
-        }
-    } catch (GhostParseError $ex) {
-        page('Mailboxes', '<h1>Mailboxes</h1><div class="notice bad">Couldn\'t read your GhostParse addresses: ' . $e($ex->getMessage()) . '</div><a class="btn" href="install.php?step=mailboxes">Try again</a>', 4);
+        $addresses = Installer::addresses(new GhostParse($s['gp']['api_url'], $s['gp']['api_key']));
+    } catch (InstallError $ex) {
+        page('Mailboxes', '<h1>Mailboxes</h1><div class="notice bad">' . $e($ex->getMessage()) . '</div><a class="btn" href="install.php?step=mailboxes">Try again</a>', 4);
     }
     if ($post) {
-        $chosen = array_values(array_intersect(array_column($addresses, 'address'), (array) ($_POST['addresses'] ?? [])));
-        $config = [
-            'app_name' => $s['admin']['app_name'], 'base_url' => $s['admin']['base_url'], 'key' => $s['key'] ??= base64_encode(Crypto::newKey()),
-            'db' => $s['db'], 'ghostparse' => $s['gp'], 'installed_at' => gmdate('c'), 'version' => App::VERSION,
-        ];
         try {
-            $app = new App(new Config($config), new Db($s['db'], $s['db']['prefix']), $gp);
-            Schema::migrate($app->db);
-            $uid = (new Auth($app))->createUser($s['admin']['email'], $s['admin']['name'], $s['admin']['password'], 'admin');
-            $admin = new Admin($app);
-            $connected = [];
-            foreach ($chosen as $address) {
-                $id = $admin->connectAddress($address, $s['admin']['app_name']);
-                (new Mailstore($app))->grant($uid, $id);
-                $connected[] = $address;
-            }
-        } catch (\Throwable $ex) {
-            // Start clean next time: the database step only accepted a database without these tables.
-            if (isset($app)) {
-                try {
-                    $app->db->run('SET FOREIGN_KEY_CHECKS = 0');
-                    foreach (Schema::tables() as $t) {
-                        $app->db->run("DROP TABLE IF EXISTS {{$t}}");
-                    }
-                    $app->db->run('SET FOREIGN_KEY_CHECKS = 1');
-                } catch (\Throwable) {
-                }
-            }
+            $s['key'] ??= base64_encode(Crypto::newKey());
+            $done = Installer::install($s['db'], $s['gp'], $s['admin'], (array) ($_POST['addresses'] ?? []), $s['key']);
+        } catch (InstallError $ex) {
             page('Mailboxes', '<h1>Install failed</h1><div class="notice bad">' . $e($ex->getMessage()) . '</div><a class="btn" href="install.php?step=mailboxes">Back</a>', 4);
         }
-        $source = Config::render($config);
-        $written = @file_put_contents(Config::path() . '.tmp', $source, LOCK_EX) !== false && @rename(Config::path() . '.tmp', Config::path());
-        if ($written) {
-            @chmod(Config::path(), 0640);
-        }
-        if ($written && is_file($presetFile)) {
-            @unlink($presetFile);
-        }
+        $connected = $done['connected'];
+        $written = $done['written'];
+        $source = $done['config'];
         $_SESSION = [];
         session_destroy();
         $list = $connected ? '<ul class="checks">' . implode('', array_map(fn ($a) => '<li class="ok"><strong>' . $e($a) . '</strong></li>', $connected)) . '</ul>' : '<p>No mailboxes yet: add them under Settings → Mailboxes.</p>';

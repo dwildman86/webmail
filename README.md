@@ -47,6 +47,27 @@ database and GhostParse steps.
 If the folder isn't writable, the last step shows the contents of `config.php` for you to upload yourself.
 If the last step fails, the installer removes what it created, so you can fix the problem and try again.
 
+### From the command line, or an app installer
+
+Softaculous, Installatron, scripts and hosts with SSH can install it in one step, without the wizard. Unzip it into
+the folder, create an empty database, then run:
+
+```sh
+php install-cli.php --db-name=acme_mail --db-user=acme_mail --db-pass='…' \
+  --api-key=ek_live_… --webhook-secret=whsec_… \
+  --admin-email=you@example.com --admin-password='…' --base-url=https://example.com/mail
+```
+
+- Optional settings: `--db-host` (default `localhost`), `--db-port` (`3306`), `--db-prefix` (`wm_`),
+  `--api-url` (`https://ghostparse.com`), `--admin-name`, `--app-name`, and `--mailboxes`.
+- `--mailboxes` is `all` by default, or a comma-separated list of addresses.
+- To pass everything as a file instead, use `--json=settings.json` (the same names).
+- It prints JSON and exits with 0 when installed. It exits with 1 and the reason when it can't install, and with 2 when
+  the options are wrong.
+- It makes the same checks as the wizard and writes `config.php`. The web server never runs it: it only works from the
+  command line, and `.htaccess` blocks it too.
+- In PHP code, `Webmail\Installer::unattended([...])` does the same.
+
 ## Using it
 
 - **Mailboxes and users**: under **Settings → Connect addresses**, an administrator turns more GhostParse addresses into mailboxes. Under **Settings → Users**, they add people and choose which mailboxes each person can read and send from. A shared mailbox, such as support@, can belong to several people.
@@ -85,7 +106,7 @@ Apache and LiteSpeed use the included `.htaccess` files. On nginx, add this to t
 
 ```nginx
 location ~ ^/mail/(app|storage|tests|vendor)/ { deny all; }
-location ~ ^/mail/(config\.php|config\.php\.tmp|setup-preset\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ { deny all; }
+location ~ ^/mail/(config\.php|config\.php\.tmp|setup-preset\.php|install-cli\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ { deny all; }
 location = /mail/sw.js { add_header Cache-Control "no-cache"; }
 client_max_body_size 48m;
 ```
