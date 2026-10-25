@@ -3,10 +3,10 @@ Options -Indexes
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteRule ^(app|storage|tests|vendor)(/|$) - [F,L]
-  RewriteRule ^(config\.php|config\.php\.tmp|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ - [F,L]
+  RewriteRule ^(config\.php|config\.php\.tmp|setup-preset\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ - [F,L]
 </IfModule>
 <IfModule !mod_rewrite.c>
-  <FilesMatch "^(config\.php|config\.php\.tmp|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$">
+  <FilesMatch "^(config\.php|config\.php\.tmp|setup-preset\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$">
     <IfModule mod_authz_core.c>
       Require all denied
     </IfModule>

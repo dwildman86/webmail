@@ -38,7 +38,15 @@ function page(string $title, string $body, int $step = 0): never
     exit;
 }
 
+// Set up from GhostParse ("Install webmail in cPanel"): it made the database and wrote setup-preset.php with it and
+// the GhostParse connection. Only the person with the one-time link can use it, and it's deleted once installed.
+$presetFile = __DIR__ . '/setup-preset.php';
+$preset = is_file($presetFile) ? (require $presetFile) : null;
+
 if (Config::installed()) {
+    if ($preset !== null) {
+        @unlink($presetFile);
+    }
     page('Already installed', '<h1>Already installed</h1><p>This webmail is set up. <a class="btn btn-primary" href="./">Open it</a></p>'
         . '<p class="muted">To run the installer again, delete <code>config.php</code> (and empty the database tables) first.</p>', 5);
 }
@@ -54,6 +62,29 @@ $post = $_SERVER['REQUEST_METHOD'] === 'POST';
 if ($post && !hash_equals($s['csrf'], (string) ($_POST['csrf'] ?? ''))) {
     page('Expired', '<h1>Please start again</h1><p>The form expired.</p><a class="btn" href="install.php">Start again</a>');
 }
+if (is_array($preset)) {
+    if (isset($_GET['token'])) {
+        $token = is_string($_GET['token']) ? $_GET['token'] : '';
+        if (!hash_equals((string) ($preset['token_sha256'] ?? ''), hash('sha256', $token))) {
+            page('Setup link', '<h1>That setup link doesn\'t match</h1><p>Copy the whole link from your GhostParse dashboard, or install the webmail there again for a new one.</p>');
+        }
+        if (strtotime((string) ($preset['expires_at'] ?? '')) < time()) {
+            page('Setup link', '<h1>That setup link has expired</h1><p>Install the webmail from your GhostParse dashboard again for a new one (choose a new folder, or delete this one in cPanel first).</p>');
+        }
+        session_regenerate_id(true);
+        $s['preset'] = true;
+        $s['db'] = $preset['db'];
+        $s['gp'] = $preset['ghostparse'];
+        $s['account'] = '';
+        $s['form'] = ['base_url' => $preset['base_url'] ?? '', 'app_name' => $preset['app_name'] ?? '', 'admin_email' => $preset['admin_email'] ?? ''];
+        header('Location: install.php?step=check');
+        exit;
+    }
+    if (empty($s['preset'])) {
+        page('Setup link', '<h1>Finish setting up from GhostParse</h1><p>This webmail was installed from GhostParse. Open the setup link it gave you to finish (it works until setup is finished, for up to 7 days).</p>');
+    }
+}
+$fromPreset = !empty($s['preset']);
 $error = '';
 $v = fn (string $k, string $default = '') => $e($_POST[$k] ?? $s['form'][$k] ?? $default);
 $detectedUrl = (Http::isHttps() ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost')
@@ -71,19 +102,32 @@ if ($step === 'check') {
         ['OpenSSL', extension_loaded('openssl'), 'Turn on the "openssl" PHP extension.'],
         ['config.php can be written', is_writable($dir) || (is_file("$dir/config.php") && is_writable("$dir/config.php")), "The folder isn't writable: you'll be shown config.php to upload yourself."],
     ];
-    $hard = array_filter(array_slice($checks, 0, 6), fn ($c) => !$c[1]);
+    if ($fromPreset) {
+        try {
+            new Db($s['db'], $s['db']['prefix']);
+            $dbOk = true;
+        } catch (\PDOException) {
+            $dbOk = false;
+        }
+        array_splice($checks, 6, 0, [['The database GhostParse made', $dbOk, "Can't connect to it yet. Wait a minute and reload; if it still fails, check it in cPanel → MySQL Databases."]]);
+    }
+    $hard = array_filter($checks, fn ($c) => !$c[1] && $c[0] !== 'config.php can be written');
     $rows = '';
     foreach ($checks as [$name, $ok, $fix]) {
         $rows .= '<li class="' . ($ok ? 'ok' : 'bad') . '"><strong>' . $e($name) . '</strong>' . ($ok ? '' : '<span>' . $e($fix) . '</span>') . '</li>';
     }
     $https = Http::isHttps() ? '' : '<div class="notice warn">This page isn\'t on HTTPS. Use https:// for the webmail: GhostParse only sends email to https addresses, and passwords need it.</div>';
-    page('Check', '<h1>Install your webmail</h1><p>It takes about five minutes. You need a MySQL database and a GhostParse API key.</p>'
+    page('Check', '<h1>Install your webmail</h1><p>' . ($fromPreset ? 'GhostParse has made the database and connected your account: just your sign-in and mailboxes to go.' : 'It takes about five minutes. You need a MySQL database and a GhostParse API key.') . '</p>'
         . $https . '<ul class="checks">' . $rows . '</ul>'
-        . ($hard ? '<p class="error">Fix the items above, then reload this page.</p>' : '<a class="btn btn-primary" href="install.php?step=db">Start</a>'), 0);
+        . ($hard ? '<p class="error">Fix the items above, then reload this page.</p>' : '<a class="btn btn-primary" href="install.php?step=' . ($fromPreset ? 'admin' : 'db') . '">Start</a>'), 0);
 }
 
 // ------------------------------------------------------------------------------------------------ 2. database
-if ($step === 'db') {
+if ($step === 'db' || ($step === 'ghostparse' && $fromPreset)) {
+    if ($fromPreset) {
+        header('Location: install.php?step=admin');
+        exit;
+    }
     if ($post) {
         $db = ['host' => trim($_POST['host'] ?? 'localhost'), 'port' => (int) ($_POST['port'] ?? 3306), 'name' => trim($_POST['name'] ?? ''),
             'user' => trim($_POST['user'] ?? ''), 'pass' => (string) ($_POST['pass'] ?? ''), 'prefix' => preg_replace('/\W/', '', $_POST['prefix'] ?? 'wm_') ?: 'wm_'];
@@ -247,6 +291,9 @@ if ($step === 'mailboxes') {
         $written = @file_put_contents(Config::path() . '.tmp', $source, LOCK_EX) !== false && @rename(Config::path() . '.tmp', Config::path());
         if ($written) {
             @chmod(Config::path(), 0640);
+        }
+        if ($written && is_file($presetFile)) {
+            @unlink($presetFile);
         }
         $_SESSION = [];
         session_destroy();

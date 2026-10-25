@@ -15,6 +15,21 @@ It runs on ordinary shared hosting: plain PHP and MySQL, no Composer, no command
 
 ## Install
 
+### On cPanel hosting, from GhostParse (about a minute)
+
+In the GhostParse dashboard, open your domain and choose **Connect cPanel → Install webmail**. Paste your cPanel
+address, username and an API token (cPanel → **Security → Manage API Tokens**). GhostParse creates the database and
+its user, uploads the webmail to the folder you choose (`mail` by default) and adds the mailboxes you list. It then
+gives you a one-time setup link. Open it to create your sign-in and choose your mailboxes. The installer skips the
+database and GhostParse steps.
+
+- The token is used for that one request and never stored. You can delete it in cPanel afterwards.
+- The link works until setup is finished, for up to 7 days. The connection details wait in `setup-preset.php`, which the installer deletes when
+  it finishes. The web server never shows that file.
+- The encryption key is made by the installer on your server, as with a manual install. It never leaves your server.
+
+### By hand
+
 1. Download the latest `webmail-x.y.z.zip` and unzip it.
 2. Upload the folder to your hosting, for example to `public_html/mail`. It works in a subfolder or on its own subdomain.
 3. In your hosting control panel, create a MySQL database and a user for it.
@@ -70,7 +85,7 @@ Apache and LiteSpeed use the included `.htaccess` files. On nginx, add this to t
 
 ```nginx
 location ~ ^/mail/(app|storage|tests|vendor)/ { deny all; }
-location ~ ^/mail/(config\.php|config\.php\.tmp|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ { deny all; }
+location ~ ^/mail/(config\.php|config\.php\.tmp|setup-preset\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ { deny all; }
 location = /mail/sw.js { add_header Cache-Control "no-cache"; }
 client_max_body_size 48m;
 ```
