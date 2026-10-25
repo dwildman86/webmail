@@ -5,7 +5,7 @@
 const VERSION = "wm-1.7.0";
 const SHELL = `${VERSION}-shell`;
 const MAIL = `${VERSION}-mail`;
-const SHELL_FILES = ["./", "assets/app.css?v=1.7.0", "assets/app.js?v=1.6.0", "assets/pwa.js?v=1.6.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
+const SHELL_FILES = ["./", "assets/app.css?v=1.7.0", "assets/app.js?v=1.7.0", "assets/pwa.js?v=1.7.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
 // API reads worth keeping for offline: the session, the lists and the messages you open.
 const OFFLINE_READS = new Set(["session", "messages", "message", "body", "contacts", "book"]);
 
