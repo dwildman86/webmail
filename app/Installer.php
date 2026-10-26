@@ -131,7 +131,8 @@ final class Installer
             $adm = new Admin($app);
             $connected = [];
             foreach ($chosen as $address) {
-                $id = $adm->connectAddress($address, $admin['app_name']);
+                // No From name of its own: email goes out under the name of whoever sends it, until one is set (Settings → Mailboxes).
+                $id = $adm->connectAddress($address);
                 (new Mailstore($app))->grant($uid, $id);
                 $connected[] = $address;
             }

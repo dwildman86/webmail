@@ -112,6 +112,25 @@ final class CoreTest extends TestCase
         $this->assertSame(0, (int) $this->app->db->value('SELECT COUNT(*) FROM {attachments}'), 'attachments go with it');
     }
 
+    public function testEmailGoesOutUnderTheSendersNameUnlessTheMailboxHasItsOwn(): void
+    {
+        $store = new Mailstore($this->app);
+        // As installs before 1.7.2 left it: the webmail's own name on the mailbox.
+        $mine = $store->createMailbox('olive@acme.test', (string) $this->app->config->get('app_name'), '');
+        $team = $store->createMailbox('support@acme.test', 'Acme Support', '');
+        $uid = (new Auth($this->app))->createUser('olive@acme.test', 'Olive Hart', 'correct horse battery');
+        $store->grant($uid, $mine);
+        $store->grant($uid, $team);
+        $this->answers['POST /v1/emails'] = fn (array $b) => [202, ['id' => 'out_' . count($this->requests), 'message_id' => '<o@acme.test>', 'thread_id' => 'thr_1', 'accepted' => $b['to'], 'suppressed' => []]];
+        $user = ['id' => $uid, 'name' => 'Olive Hart'];
+
+        $store->send($user, $mine, ['to' => 'jane@customer.example', 'subject' => 'Hello', 'text' => 'Hi']);
+        $this->assertSame(['address' => 'olive@acme.test', 'name' => 'Olive Hart'], end($this->requests)['body']['from'], 'the person, not the webmail');
+        $this->assertSame('', $store->mailbox($uid, $mine)['display_name'], 'and the From list shows no app name either');
+        $store->send($user, $team, ['to' => 'jane@customer.example', 'subject' => 'Hello', 'text' => 'Hi']);
+        $this->assertSame(['address' => 'support@acme.test', 'name' => 'Acme Support'], end($this->requests)['body']['from'], 'a team name set on purpose stays');
+    }
+
     public function testSendingThroughGhostParseKeepsACopyInSentInTheSameConversation(): void
     {
         $store = new Mailstore($this->app);

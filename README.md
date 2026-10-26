@@ -96,6 +96,7 @@ marks.
 - **Mailboxes and users**: under **Settings → Connect addresses**, an administrator turns more GhostParse addresses into mailboxes. Under **Settings → Users**, they add people and choose which mailboxes each person can read and send from. A shared mailbox, such as support@, can belong to several people.
 - **Folders**: Inbox, Starred, Sent, Drafts, Archive, Spam and Trash. Conversations are grouped into threads. Email that GhostParse's spam check flags goes to Spam.
 - **Search**: searches senders, recipients, subjects and message text. It works on the encrypted data (see below).
+- **From name**: email goes out under the sender's own name, unless the mailbox has a name of its own (set it under **Settings → Mailboxes**, for example *Acme Support* for a shared mailbox).
 - **Writing**: rich text, attachments up to 20 MB, Cc and Bcc, address suggestions from people you've written to, and a signature per mailbox.
   The signature is the address's on GhostParse, so it's the same wherever the address's email is sent from (here,
   your website, your shop):
@@ -110,7 +111,7 @@ marks.
 
 - **Install as an app**: in Chrome or Edge, use *Install* in the address bar. On Android, choose *Add to Home screen*. On iPhone or iPad, tap *Share*, then *Add to Home Screen*.
 - **Two-step verification**: the first time you sign in, you set up an authenticator app (scan the QR code) or a passkey, and save your recovery codes. After that, each sign-in asks for a code from the app, or you use your passkey.
-- **Passkeys**: **Settings → Sign-in & alerts → Add a passkey**. After that, choose *Use a passkey* on the sign-in page to sign in with your face, fingerprint or device PIN. Your fingerprint or face never leaves the device. Passwords keep working too.
+- **Passkeys**: **Settings → Sign-in & alerts → Add a passkey**. After that, sign in with your face, fingerprint or device PIN: choose *Sign in with Face ID* (or *with a passkey*, *Windows Hello*…) on the sign-in page, or pick the passkey your keyboard suggests in the email box. In the installed app, a device that has used its passkey asks for Face ID straight away. Your fingerprint or face never leaves the device. Passwords keep working too.
 - **Notifications**: **Settings → Sign-in & alerts → Turn on**, once on each device. You're told about new email in your inboxes, even when the webmail is closed. On iPhone and iPad, this works from the Home Screen app (iOS 16.4 or newer).
 - **Offline**: the app opens without a connection and shows the mail you've already opened on that device. Signing out clears it.
 

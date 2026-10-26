@@ -72,8 +72,13 @@ final class Mailstore
     private function presentMailbox(array $r): array
     {
         $c = $this->c();
+        $name = $c->decrypt($r['display_name_enc'], 'mailboxes.display_name') ?? '';
+        // Installs before 1.7.2 gave every mailbox the webmail's own name: that's not a From name, so the sender's is used.
+        if ($name !== '' && $name === (string) $this->app->config->get('app_name', '')) {
+            $name = '';
+        }
         return ['id' => (int) $r['id'], 'address' => $c->decrypt($r['address_enc'], 'mailboxes.address'),
-            'display_name' => $c->decrypt($r['display_name_enc'], 'mailboxes.display_name') ?? '',
+            'display_name' => $name,
             'signature' => $c->decrypt($r['signature_enc'], 'mailboxes.signature') ?? ''];
     }
 

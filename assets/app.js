@@ -112,17 +112,19 @@ const FOLDERS = [["inbox", "Inbox", "inbox"], ["starred", "Starred", "star"], ["
 const state = { user: null, mailboxes: [], mailbox: 0, folder: "inbox", query: "", page: 1, messages: [], hasMore: false, selected: null, appInfo: {} };
 
 // ------------------------------------------------------------------------------------------------ sign in
-function showLogin(message) {
+function showLogin(message, { signedOut = false } = {}) {
   const error = h("div", { class: "error", role: "alert" }, message || "");
   const email = h("input", { type: "email", name: "email", required: true, autocomplete: "username webauthn" });
   const password = h("input", { type: "password", name: "password", required: true, autocomplete: "current-password" });
-  const submit = h("button", { class: "btn btn-primary" }, "Sign in");
+  // One blue button: the passkey's, on a device that has used one.
+  const submit = h("button", { class: window.Passkeys?.usedHere?.() ? "btn" : "btn btn-primary" }, "Sign in");
   const form = h("form", { onsubmit: async (ev) => {
     ev.preventDefault();
     submit.disabled = true;
     error.textContent = "";
     try {
       const r = await api("login", { method: "POST", body: { email: email.value, password: password.value } });
+      window.Passkeys?.pending?.abort(); // the passkey suggestion isn't needed now
       csrf = r.csrf;
       if (r.mfa) showSecondStep(r); else await start();
     } catch (err) {
@@ -132,12 +134,16 @@ function showLogin(message) {
   } },
   h("label", { class: "field" }, "Email", email),
   h("label", { class: "field" }, "Password", password),
-  h("div", { class: "auth-actions" }, submit, window.Passkeys?.loginButton?.(error)),
+  // On a device that has signed in with a passkey, that comes first.
+  h("div", { class: "auth-actions" }, ...(window.Passkeys?.usedHere?.() ? [window.Passkeys.loginButton(error), submit] : [submit, window.Passkeys?.loginButton?.(error)])),
   error);
   $app.replaceChildren(h("main", { class: "auth-wrap" },
     h("div", { class: "brand" }, h("span", { class: "logo", "aria-hidden": "true" }), APP_NAME),
     h("section", { class: "card" }, h("h1", {}, "Sign in"), h("p", {}, "to read and send your email."), form)));
-  email.focus();
+  // In the installed app with a passkey used before, Face ID comes up by itself: no keyboard in the way.
+  if (signedOut || !(window.Passkeys?.usedHere?.() && (matchMedia("(display-mode: standalone)").matches || navigator.standalone === true))) email.focus();
+  // Just signed out: don't bring Face ID straight back up (the button and the keyboard suggestion are still there).
+  window.Passkeys?.offer?.({ prompt: !signedOut });
 }
 
 async function start() {
@@ -313,7 +319,7 @@ async function signOut() {
   await api("logout", { method: "POST" }).catch(() => {});
   navigator.serviceWorker?.controller?.postMessage("signed-out");
   $shell = null;
-  showLogin();
+  showLogin("", { signedOut: true });
 }
 
 function unreadFor(folder) {

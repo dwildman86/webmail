@@ -18,11 +18,29 @@ if ("serviceWorker" in navigator && (location.protocol === "https:" || location.
 window.Passkeys = {
   available: () => !!window.PublicKeyCredential && window.isSecureContext,
 
-  /** The "Sign in with a passkey" button on the sign-in page. */
+  /** What to call it here: on Apple devices people know it as Face ID or Touch ID. */
+  label() {
+    const ua = navigator.userAgent;
+    if (/iPhone/.test(ua)) return "Sign in with Face ID";
+    if (/iPad|Macintosh/.test(ua)) return "Sign in with Touch ID or Face ID";
+    if (/Windows/.test(ua)) return "Sign in with Windows Hello";
+    if (/Android/.test(ua)) return "Sign in with your fingerprint";
+    return "Sign in with a passkey";
+  },
+
+  /** This device has signed in with a passkey before (not a secret: it only decides which button comes first). */
+  usedHere() {
+    try { return localStorage.getItem("wm.passkey") === "1"; } catch { return false; }
+  },
+  rememberHere() {
+    try { localStorage.setItem("wm.passkey", "1"); } catch { /* private browsing: fine */ }
+  },
+
+  /** The passkey button on the sign-in page; first and blue on a device that has used one. */
   loginButton(errorEl) {
     if (!this.available()) return null;
     const { h, icon } = window.Webmail;
-    const btn = h("button", { type: "button", class: "btn", onclick: async () => {
+    const btn = h("button", { type: "button", class: this.usedHere() ? "btn btn-primary" : "btn", onclick: async () => {
       btn.disabled = true;
       errorEl.textContent = "";
       try {
@@ -32,18 +50,55 @@ window.Passkeys = {
         errorEl.textContent = err.name === "NotAllowedError" ? "Passkey sign-in was cancelled." : err.message;
         btn.disabled = false;
       }
-    } }, icon("shield"), "Use a passkey");
+    } }, icon("shield"), this.label());
     return btn;
   },
 
-  async login() {
+  /**
+   * The sign-in page offers the passkey by itself: in the keyboard's suggestions when the email box is tapped (where
+   * the browser supports it), and, in the installed app on a device that has used a passkey, straight away.
+   */
+  async offer({ prompt = true } = {}) {
+    if (!this.available()) return;
+    const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    if (prompt && standalone && this.usedHere()) {
+      try {
+        await this.login();
+        await window.Webmail.start();
+        return;
+      } catch {
+        // Not now (the browser may want a tap first, or it was cancelled): the button is there.
+      }
+    }
+    try {
+      if (!(await PublicKeyCredential.isConditionalMediationAvailable?.())) return;
+      await this.login({ conditional: true });
+      await window.Webmail.start();
+    } catch {
+      // Offered, not asked for: nothing to report. The button says what's wrong if someone uses it.
+    }
+  },
+
+  /** Only one passkey request at a time: a new one (the button) cancels the waiting keyboard suggestion. */
+  pending: null,
+
+  async login({ conditional = false } = {}) {
     const { api } = window.Webmail;
+    this.pending?.abort();
+    const ctl = new AbortController();
+    this.pending = ctl;
     const o = await api("passkey/login/options");
-    const cred = await navigator.credentials.get({ publicKey: { challenge: b64u.decode(o.challenge), rpId: o.rpId, userVerification: o.userVerification, timeout: o.timeout } });
+    const cred = await navigator.credentials.get({
+      publicKey: { challenge: b64u.decode(o.challenge), rpId: o.rpId, userVerification: o.userVerification, timeout: o.timeout },
+      signal: ctl.signal, ...(conditional ? { mediation: "conditional" } : {}),
+    });
+    if (this.pending === ctl) this.pending = null;
     const r = cred.response;
     // Sign-in has no CSRF token yet; the signature over the challenge is what proves it.
-    return api("passkey/login", { method: "POST", body: { id: b64u.encode(cred.rawId), clientDataJSON: b64u.encode(r.clientDataJSON),
+    const done = await api("passkey/login", { method: "POST", body: { id: b64u.encode(cred.rawId), clientDataJSON: b64u.encode(r.clientDataJSON),
       authenticatorData: b64u.encode(r.authenticatorData), signature: b64u.encode(r.signature), userHandle: r.userHandle ? b64u.encode(r.userHandle) : null } });
+    this.rememberHere();
+    return done;
   },
 
   async register(name) {
@@ -53,7 +108,9 @@ window.Passkeys = {
       ...o, challenge: b64u.decode(o.challenge), user: { ...o.user, id: b64u.decode(o.user.id) },
       excludeCredentials: o.excludeCredentials.map((c) => ({ ...c, id: b64u.decode(c.id) })),
     } });
-    return api("passkey/register", { method: "POST", body: { name, clientDataJSON: b64u.encode(cred.response.clientDataJSON), attestationObject: b64u.encode(cred.response.attestationObject) } });
+    const done = await api("passkey/register", { method: "POST", body: { name, clientDataJSON: b64u.encode(cred.response.clientDataJSON), attestationObject: b64u.encode(cred.response.attestationObject) } });
+    this.rememberHere();
+    return done;
   },
 
   /** The Passkeys section in Settings. */
