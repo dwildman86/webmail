@@ -134,16 +134,25 @@ try {
             $sizer = '<script nonce="' . $nonce . '">(function(){var last=0;function report(){var h=Math.ceil(document.documentElement.scrollHeight);'
                 . 'if(h!==last){last=h;parent.postMessage({webmailFrame:' . $int('id') . ',height:h},"*");}}'
                 . 'addEventListener("load",report);if(window.ResizeObserver){new ResizeObserver(report).observe(document.documentElement);}report();})();</script>';
-            $style = '<style>html{color-scheme:light}body{margin:0;padding:16px 20px;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1d2330;background:#fff;word-wrap:break-word}'
-                . 'img{max-width:100%;height:auto}pre{white-space:pre-wrap;font:inherit;margin:0}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:3px solid #d6dbe4;color:#5b6475}a{color:#2563eb}</style>';
-            if ($m['html']) {
-                $html = preg_replace('#<script\b[^>]*>.*?</script>#is', '', (string) $m['html']);
-                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body>' . $html . $sizer . '</body></html>';
+            $html = $m['html'] ? preg_replace('#<script\b[^>]*>.*?</script>#is', '', (string) $m['html']) : null;
+            // Dark mode follows the device. Plain email and simply formatted email are shown dark; an email designed
+            // with its own backgrounds stays as its sender drew it (on light), unless it says it has a dark version.
+            $designed = $html !== null && preg_match('/bgcolor\s*=|background(?:-color)?\s*:\s*+(?!transparent|none|inherit|initial)/i', $html)
+                && !preg_match('/prefers-color-scheme\s*:\s*dark/i', $html);
+            $style = '<style>html{color-scheme:light' . ($designed ? '' : ' dark') . '}body{margin:0;padding:16px 20px;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1d2330;background:#fff;word-wrap:break-word}'
+                . 'img{max-width:100%;height:auto}pre{white-space:pre-wrap;font:inherit;margin:0}blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:3px solid #d6dbe4;color:#5b6475}a{color:#2563eb}.q{color:#5b6475}'
+                . ($designed ? '' : '@media (prefers-color-scheme:dark){body{color:#e8ecf3;background:#151a22}body *{color:inherit!important;background-color:transparent!important;border-color:#323b4a!important}'
+                    . 'a,a *{color:#7aa7ff!important}blockquote,.q{color:#9aa5ba!important}blockquote{border-left-color:#3a4456!important}hr{border-color:#323b4a}}')
+                . '</style>';
+            // Cloudflare's "email address obfuscation" rewrites addresses in HTML pages into "[email protected]" and
+            // needs a script to put them back, which can't run here: these markers tell it to leave the email alone.
+            if ($html !== null) {
+                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body><!--email_off-->' . $html . '<!--/email_off-->' . $sizer . '</body></html>';
             } else {
                 $text = $esc($m['text']);
                 $text = preg_replace('#(https?://[^\s<>"]+)#', '<a href="$1" rel="noopener noreferrer">$1</a>', $text);
-                $text = preg_replace('/^(&gt;.*)$/m', '<span style="color:#5b6475">$1</span>', $text);
-                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body><pre>' . $text . '</pre>' . $sizer . '</body></html>';
+                $text = preg_replace('/^(&gt;.*)$/m', '<span class="q">$1</span>', $text);
+                echo '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">' . $style . '</head><body><!--email_off--><pre>' . $text . '</pre><!--/email_off-->' . $sizer . '</body></html>';
             }
             exit;
         case 'POST messages/update':

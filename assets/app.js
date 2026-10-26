@@ -304,7 +304,9 @@ function renderShell() {
         h("div", { class: "search" }, icon("search"), $search),
         h("button", { class: "icon-btn", title: "Refresh", "aria-label": "Refresh", onclick: () => refresh() }, icon("refresh"))),
       $listTitle, $list),
-    $reader);
+    $reader,
+    // On a phone, tapping anywhere outside the open menu closes it.
+    h("div", { class: "scrim", "aria-hidden": "true", onclick: () => $shell.classList.remove("menu") }));
   $app.replaceChildren($shell);
   if (!state.mailboxes.length) {
     $list.replaceChildren(h("div", { class: "empty" }, icon("mail"), h("p", {}, "You don't have a mailbox yet."),
@@ -778,7 +780,9 @@ async function openSettings(tab = "account") {
     ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-mailboxes", "Connect addresses"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
-    nav.replaceChildren(...tabs.map(([k, label]) => h("button", { class: k === key ? "on" : "", onclick: () => show(k) }, label)));
+    nav.replaceChildren(...tabs.map(([k, label]) => h("button", { class: k === key ? "on" : "", "aria-current": k === key ? "page" : null, onclick: () => show(k) }, label)));
+    // On a phone the tabs scroll sideways: keep the chosen one in view.
+    nav.querySelector(".on")?.scrollIntoView({ block: "nearest", inline: "center" });
     body.replaceChildren(h("p", { class: "muted" }, "Loading…"));
     try { body.replaceChildren(await SETTINGS[key]()); } catch (err) { body.replaceChildren(h("div", { class: "notice bad" }, err.message)); }
   };
@@ -1191,6 +1195,8 @@ const SETTINGS = {
 };
 
 // ------------------------------------------------------------------------------------------------ keyboard
+// Escape closes the menu on a phone, as tapping outside it does.
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $shell?.classList.contains("menu")) $shell.classList.remove("menu"); });
 document.addEventListener("keydown", (e) => {
   if (!$shell || e.target.closest("input, textarea, select, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey || document.querySelector(".overlay")) return;
   if (state.folder === "contacts" && !["c", "/"].includes(e.key)) return; // mail shortcuts don't apply to contacts

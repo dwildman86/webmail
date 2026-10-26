@@ -220,12 +220,20 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
   .reader-body { padding: 14px 12px 40px; }
   .overlay { padding: 0; }
   .compose, .dialog { width: 100%; height: 100%; max-height: none; border-radius: 0; }
-  .dialog-body { grid-template-columns: 1fr; }
-  .tabs { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .dialog-body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  /* Settings tabs: one row of pills that scrolls sideways. */
+  .tabs { flex-direction: row; align-items: center; gap: 8px; padding: 10px 14px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line);
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-padding: 0 14px; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button { flex: none; white-space: nowrap; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--panel); font-size: 14px; line-height: 1.2; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .shell.menu .scrim { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(0, 0, 0, .45); animation: scrim-in .2s ease; }
+  @keyframes scrim-in { from { opacity: 0; } }
   .msg .subject { max-width: none; flex: 1; }
   .msg .snippet { display: none; }
 }
 @media (min-width: 901px) { .menu-btn { display: none; } }
+.scrim { display: none; }
 
 /* Settings rows, compose signature */
 .row.between { justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
