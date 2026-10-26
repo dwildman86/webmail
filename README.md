@@ -113,6 +113,7 @@ marks.
 - **Two-step verification**: the first time you sign in, you set up an authenticator app (scan the QR code) or a passkey, and save your recovery codes. After that, each sign-in asks for a code from the app, or you use your passkey.
 - **Passkeys**: **Settings → Sign-in & alerts → Add a passkey**. After that, sign in with your face, fingerprint or device PIN: choose *Sign in with Face ID* (or *with a passkey*, *Windows Hello*…) on the sign-in page, or pick the passkey your keyboard suggests in the email box. In the installed app, a device that has used its passkey asks for Face ID straight away. Your fingerprint or face never leaves the device. Passwords keep working too.
 - **Notifications**: **Settings → Sign-in & alerts → Turn on**, once on each device. You're told about new email in your inboxes, even when the webmail is closed. On iPhone and iPad, this works from the Home Screen app (iOS 16.4 or newer).
+- **On your phone**: quick buttons along the bottom: Inbox (with its unread count), Sent, Compose, Contacts, and More for every other folder and Settings. Tap the open folder again to go back to the top.
 - **Offline**: the app opens without a connection and shows the mail you've already opened on that device. Signing out clears it.
 
 ## Security

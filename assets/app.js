@@ -273,7 +273,7 @@ function recoveryCodesBox(codes, text) {
 }
 
 // ------------------------------------------------------------------------------------------------ the shell
-let $shell, $folders, $list, $reader, $listTitle, $search;
+let $shell, $folders, $list, $reader, $listTitle, $search, $tabbar;
 function renderShell() {
   $folders = h("ul", { class: "folders" });
   $list = h("div", { class: "messages", role: "list" });
@@ -306,7 +306,9 @@ function renderShell() {
       $listTitle, $list),
     $reader,
     // On a phone, tapping anywhere outside the open menu closes it.
-    h("div", { class: "scrim", "aria-hidden": "true", onclick: () => $shell.classList.remove("menu") }));
+    h("div", { class: "scrim", "aria-hidden": "true", onclick: () => $shell.classList.remove("menu") }),
+    ($tabbar = h("nav", { class: "tabbar", "aria-label": "Quick links" })));
+  renderTabbar();
   $app.replaceChildren($shell);
   if (!state.mailboxes.length) {
     $list.replaceChildren(h("div", { class: "empty" }, icon("mail"), h("p", {}, "You don't have a mailbox yet."),
@@ -329,17 +331,46 @@ function unreadFor(folder) {
 }
 
 function renderFolders() {
+  renderTabbar();
   $search.placeholder = state.folder === "contacts" ? "Search contacts" : "Search mail";
   $search.setAttribute("aria-label", $search.placeholder);
   $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"]].map(([key, label, ic]) => {
     const n = key === "starred" ? 0 : unreadFor(key);
     return h("li", { class: key === "contacts" ? "sep" : "" }, h("a", { href: "#", class: state.folder === key && !state.query ? "on" : "", onclick: (e) => {
       e.preventDefault();
-      state.folder = key; state.query = ""; state.page = 1; $search.value = "";
-      $shell.classList.remove("menu", "reading");
-      renderFolders(); loadList();
+      openFolder(key);
     } }, icon(ic), label, n > 0 && key !== "sent" && key !== "drafts" && key !== "trash" ? h("span", { class: "badge" }, n > 99 ? "99+" : String(n)) : null));
   }));
+}
+
+function openFolder(key) {
+  state.folder = key; state.query = ""; state.page = 1; $search.value = "";
+  $shell.classList.remove("menu", "reading");
+  renderFolders(); loadList();
+  $list.scrollTop = 0;
+}
+
+/**
+ * Phones: quick buttons along the bottom of the screen, in reach of a thumb. Inbox, Sent, a raised Compose in the
+ * middle, Contacts, and More for the rest (the side menu: every folder, mailboxes, settings).
+ */
+function renderTabbar() {
+  if (!$tabbar) return;
+  const unread = unreadFor("inbox");
+  const tab = (key, label, ic, badge) => h("button", { type: "button", class: `tab${state.folder === key && !state.query ? " on" : ""}`,
+    "aria-current": state.folder === key && !state.query ? "page" : null, onclick: () => {
+      // Tapping the open folder again goes back to the top of it.
+      if (state.folder === key && !state.query && !$shell.classList.contains("reading")) { $list.scrollTo({ top: 0, behavior: "smooth" }); return; }
+      openFolder(key);
+    } },
+    h("span", { class: "tab-icon" }, icon(ic), badge ? h("span", { class: "tab-badge" }, badge > 99 ? "99+" : String(badge)) : null), h("span", { class: "tab-label" }, label));
+  $tabbar.replaceChildren(
+    tab("inbox", "Inbox", "inbox", unread),
+    tab("sent", "Sent", "sent"),
+    h("button", { type: "button", class: "tab tab-compose", "aria-label": "Compose", onclick: () => compose() }, h("span", { class: "tab-fab" }, icon("compose"))),
+    tab("contacts", "Contacts", "contacts"),
+    h("button", { type: "button", class: `tab${["inbox", "sent", "contacts"].includes(state.folder) || state.query ? "" : " on"}`, onclick: () => $shell.classList.add("menu") },
+      h("span", { class: "tab-icon" }, icon("menu")), h("span", { class: "tab-label" }, "More")));
 }
 
 function placeholder() {

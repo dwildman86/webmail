@@ -227,6 +227,29 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
   .tabs::-webkit-scrollbar { display: none; }
   .tabs button { flex: none; white-space: nowrap; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--panel); font-size: 14px; line-height: 1.2; }
   .tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  /* Quick buttons along the bottom, above the home indicator. */
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-columns: repeat(5, 1fr); align-items: end;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--panel) 88%, transparent);
+    -webkit-backdrop-filter: saturate(1.6) blur(18px); backdrop-filter: saturate(1.6) blur(18px); border-top: 1px solid var(--line); }
+  .shell.reading .tabbar { display: none; }
+  .tab { display: flex; flex-direction: column; align-items: center; gap: 3px; min-height: 48px; padding: 4px 0 2px; border: 0; background: none; color: var(--muted);
+    font: 600 11px/1.1 var(--font); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .tab.on { color: var(--accent); }
+  .tab .tab-icon { position: relative; display: grid; place-items: center; width: 52px; height: 28px; border-radius: 999px; transition: background .2s; }
+  .tab.on .tab-icon { background: var(--accent-soft); }
+  .tab svg { width: 22px; height: 22px; }
+  .tab:active .tab-icon { transform: scale(.92); }
+  .tab-badge { position: absolute; top: -4px; right: 2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-text);
+    font: 700 10.5px/18px var(--font); text-align: center; box-shadow: 0 0 0 2px var(--panel); }
+  /* Compose: raised in the middle, the one thing you most often start. */
+  .tab-compose { justify-content: flex-start; }
+  .tab-fab { display: grid; place-items: center; width: 54px; height: 54px; margin-top: -24px; border-radius: 50%; background: var(--accent); color: var(--accent-text);
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 0 5px var(--bg); transition: transform .15s; }
+  .tab-fab svg { width: 24px; height: 24px; stroke-width: 2.4; }
+  .tab-compose:active .tab-fab { transform: scale(.94); }
+  /* Room for the bar under the list, and toasts above it. */
+  .messages { padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(86px + env(safe-area-inset-bottom)); }
   .shell.menu .scrim { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(0, 0, 0, .45); animation: scrim-in .2s ease; }
   @keyframes scrim-in { from { opacity: 0; } }
   .msg .subject { max-width: none; flex: 1; }
