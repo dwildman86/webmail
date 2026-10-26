@@ -61,6 +61,8 @@ code { font-family: var(--mono); font-size: .92em; background: var(--panel-2); b
 .grow { flex: 1; min-width: 160px; }
 .short { width: 110px; }
 .check { display: flex; gap: 10px; align-items: center; margin: 8px 0; font-weight: 450; }
+/* A checkbox inside a form field keeps its own size (not the text inputs' full width and height). */
+.field .check input { width: auto; height: auto; padding: 0; flex: none; box-shadow: none; }
 .notice { padding: 10px 14px; border-radius: var(--radius-sm); margin: 0 0 14px; border: 1px solid transparent; }
 .notice.bad { background: var(--danger-soft); color: var(--danger); }
 .notice.ok { background: var(--ok-soft); color: var(--ok); }
