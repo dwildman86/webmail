@@ -18,23 +18,36 @@ final class Auth
     {
     }
 
-    public static function startSession(string $basePath): void
+    /**
+     * Start the session: in the webmail's database when it's given (see Sessions), else PHP's own files. Someone
+     * signed in stays signed in while they keep using it: the cookie's 30 days start again each day they do.
+     */
+    public static function startSession(string $basePath, ?App $app = null): void
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
+        $lifetime = self::IDLE_DAYS * 86400;
         ini_set('session.use_strict_mode', '1');
         ini_set('session.use_only_cookies', '1');
-        ini_set('session.gc_maxlifetime', (string) (self::IDLE_DAYS * 86400));
+        ini_set('session.gc_maxlifetime', (string) $lifetime);
+        if ($app) {
+            session_set_save_handler(new Sessions($app, $lifetime), true);
+        }
         session_name('wmsid');
-        session_set_cookie_params([
-            'lifetime' => self::IDLE_DAYS * 86400,
+        $cookie = [
+            'lifetime' => $lifetime,
             'path' => $basePath === '' ? '/' : $basePath . '/',
             'secure' => Http::isHttps(),
             'httponly' => true,
             'samesite' => 'Lax',
-        ]);
+        ];
+        session_set_cookie_params($cookie);
         session_start();
+        if (!empty($_SESSION['uid']) && (int) ($_SESSION['cookie_at'] ?? 0) < time() - 86400) {
+            $_SESSION['cookie_at'] = time();
+            setcookie(session_name(), session_id(), ['expires' => time() + $lifetime] + array_diff_key($cookie, ['lifetime' => 1]));
+        }
     }
 
     public static function hash(string $password): string

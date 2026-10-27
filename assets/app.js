@@ -318,8 +318,10 @@ function renderShell() {
 }
 
 async function signOut() {
-  // A shared computer shouldn't keep getting this person's notifications or keep their mail for offline reading.
-  await window.Notifications?.disable?.().catch(() => {});
+  // A shared computer shouldn't keep getting this person's notifications or keep their mail for offline reading. The
+  // installed app is the person's own phone or computer: notifications keep coming after signing out there.
+  const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (!installed) await window.Notifications?.disable?.().catch(() => {});
   await api("logout", { method: "POST" }).catch(() => {});
   navigator.serviceWorker?.controller?.postMessage("signed-out");
   $shell = null;

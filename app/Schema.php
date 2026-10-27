@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -188,6 +188,15 @@ final class Schema
             // Importing straight from this hosting account's own mailboxes (cPanel's Maildir folders).
             5 => [
                 "ALTER TABLE {imports} MODIFY kind ENUM('imap','file','maildir') NOT NULL",
+            ],
+            // Sign-in sessions, here instead of PHP's session files (which many hosts clear on their own schedule).
+            6 => [
+                "CREATE TABLE IF NOT EXISTS {sessions} (
+                    id_hash CHAR(64) NOT NULL PRIMARY KEY,
+                    data_enc MEDIUMTEXT NOT NULL,
+                    updated_at INT UNSIGNED NOT NULL,
+                    KEY session_age (updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];
     }

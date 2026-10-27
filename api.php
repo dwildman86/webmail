@@ -23,7 +23,14 @@ if (!Config::installed()) {
 }
 
 $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-Auth::startSession($base);
+try {
+    // Sessions live in the database (see Sessions), so it's brought up to date first.
+    $sessionApp = App::get();
+    \Webmail\Schema::upgrade($sessionApp->db);
+    Auth::startSession($base, $sessionApp);
+} catch (\Throwable) {
+    Auth::startSession($base); // the database isn't reachable: the request below says so
+}
 
 $action = (string) ($_GET['a'] ?? '');
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
