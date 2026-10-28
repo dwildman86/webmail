@@ -50,6 +50,12 @@ final class Admin
                 Http::json(['ok' => true]);
             case 'GET admin/status':
                 Http::json($this->status());
+            // Updates: what's newest at GhostParse, and installing it (with the administrator's password).
+            case 'GET admin/update':
+                Http::json((new Updater($this->app))->check(($_GET['refresh'] ?? '') === '1'));
+            case 'POST admin/update':
+                (new Auth($this->app))->confirmPassword($me['id'], (string) ($in['password'] ?? ''));
+                Http::json((new Updater($this->app))->install());
         }
         throw new HttpError(404, 'Unknown action', 'not_found');
     }

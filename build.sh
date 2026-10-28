@@ -20,4 +20,9 @@ cp -R app assets storage api.php index.php install.php install-cli.php manifest.
 find "$STAGE/webmail/storage" -mindepth 1 ! -name .htaccess ! -name index.html -exec rm -rf {} +
 rm -f "$OUT"
 (cd "$STAGE" && zip -qr -X "$OLDPWD/$OUT" webmail)
+# This release's notes, for GhostParse to show beside Update now: the CHANGELOG.md section for this version.
+NOTES="dist/webmail-$VERSION.txt"
+awk -v v="## $VERSION" '$0 == v { on = 1; next } on && /^## / { exit } on' CHANGELOG.md | sed '/^$/d' > "$NOTES"
+[ -s "$NOTES" ] || { echo "CHANGELOG.md has no notes for $VERSION" >&2; exit 1; }
 echo "$OUT ($(du -h "$OUT" | cut -f1))"
+echo "$NOTES"

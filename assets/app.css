@@ -320,3 +320,7 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
 .import-row .row { gap: 8px; margin-top: 4px; flex-wrap: wrap; }
 .imports h3 { margin-bottom: 8px; }
 .oauth-buttons { gap: 10px; align-items: center; flex-wrap: wrap; margin: 4px 0 12px; }
+
+/* Settings → Status: a release's notes. */
+.release-notes { margin: 8px 0 14px; padding: 10px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
+.release-notes pre { margin: 6px 0 0; white-space: pre-wrap; font: inherit; font-size: 13.5px; }

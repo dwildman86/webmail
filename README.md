@@ -147,8 +147,24 @@ Also set `post_max_size = 48M` and `upload_max_filesize = 32M` in PHP-FPM, if `.
 
 ## Updating
 
-Upload the new version's files over the old ones, keeping your `config.php`. Database changes are applied
-automatically the next time anyone opens the webmail.
+**With one click (1.8.0 and later):** when GhostParse has a new version, administrators are told when they sign in,
+and **Settings → Status** shows the new version and what's new, with **Update**. It asks for your password, then
+downloads the zip from GhostParse (`<api_url>/downloads/webmail-latest.json` says which, with its SHA-256), checks
+it, and copies the new files over these ones:
+
+- `config.php`, `setup-preset.php` and `storage/` are never replaced.
+- Each file that's replaced is kept in `storage/updates/backup-<old version>/`. If a copy fails part way, every file
+  is put back as it was.
+- The database is brought up to date the next time anyone opens the webmail, as after a manual update.
+- It needs PHP's zip extension and the webmail's folder writable by the web server. If either is missing, Status says
+  so, and you update by hand.
+
+**By hand:** upload the new version's files over the old ones, keeping your `config.php`. Database changes are
+applied automatically the next time anyone opens the webmail.
+
+**Releasing (for the GhostParse platform):** add the version's notes to `CHANGELOG.md`, set the version in
+`app/App.php` and `sw.js`, then on the platform run `sh deploy/publish-webmail.sh /path/to/webmail`, commit, package
+and deploy. Installed webmails see it within 12 hours, or straight away with **Check again**.
 
 ## Troubleshooting
 

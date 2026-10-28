@@ -164,7 +164,7 @@ async function start() {
       history.replaceState(null, "", location.pathname + location.hash);
       openSettings("import");
     }
-
+    if (state.user.role === "admin") offerUpdate();
   } catch (err) {
     if (err.status === 401 && err.data?.mfa) { csrf = err.data.csrf || csrf; showSecondStep(err.data); }
     else if (err.status === 401) showLogin();
@@ -373,6 +373,54 @@ function renderTabbar() {
     tab("contacts", "Contacts", "contacts"),
     h("button", { type: "button", class: `tab${["inbox", "sent", "contacts"].includes(state.folder) || state.query ? "" : " on"}`, onclick: () => $shell.classList.add("menu") },
       h("span", { class: "tab-icon" }, icon("menu")), h("span", { class: "tab-label" }, "More")));
+}
+
+/** Administrators hear about a new webmail release once per session, with a way straight to updating it. */
+async function offerUpdate() {
+  try {
+    if (sessionStorage.getItem("wm.update-offered")) return;
+    const u = await api("admin/update");
+    if (!u.available) return;
+    sessionStorage.setItem("wm.update-offered", "1");
+    toast(`Webmail ${u.latest} is available (you have ${u.current}).`, { label: "Update", run: () => openSettings("admin-status") });
+  } catch { /* checking is a nicety: nothing to say if it fails */ }
+}
+
+/** Settings → Status: the installed version, the newest one, and the Update now button. */
+async function updateSection() {
+  const box = h("section", {}, h("h3", {}, "Webmail version"));
+  const render = async (refresh) => {
+    box.replaceChildren(h("h3", {}, "Webmail version"), h("p", { class: "muted" }, "Checking…"));
+    let u;
+    try { u = await api("admin/update", { query: refresh ? { refresh: "1" } : {} }); } catch (err) { box.append(h("div", { class: "notice bad" }, err.message)); return; }
+    const again = h("button", { class: "btn btn-sm", type: "button", onclick: () => render(true) }, "Check again");
+    const parts = [h("h3", {}, "Webmail version")];
+    if (u.error) parts.push(h("div", { class: "notice warn" }, u.error));
+    if (!u.available) {
+      parts.push(h("div", { class: "notice ok" }, `You have the newest version, ${u.current}.`), h("div", { class: "row" }, again,
+        u.checked_at ? h("span", { class: "muted small" }, `Checked ${new Date(u.checked_at * 1000).toLocaleString()}`) : null));
+      box.replaceChildren(...parts);
+      return;
+    }
+    parts.push(h("p", {}, "Version ", h("strong", {}, u.latest), " is available. You have ", u.current, "."));
+    if (u.notes) parts.push(h("div", { class: "release-notes" }, h("div", { class: "muted small" }, "What's new"), h("pre", {}, u.notes)));
+    if (!u.can_update) {
+      parts.push(h("div", { class: "notice warn" }, ...u.blockers.map((b) => h("div", {}, b))),
+        h("p", { class: "muted small" }, "To update by hand, download the new zip from GhostParse and upload its files over these ones, keeping config.php."), again);
+      box.replaceChildren(...parts);
+      return;
+    }
+    parts.push(h("p", { class: "muted small" }, "The new files are downloaded from GhostParse, checked, and copied over these ones. Your settings, mail and users stay as they are, and the old files are kept in storage/updates in case they're needed. It takes a few seconds."),
+      formFor([h("label", { class: "field" }, "Your password, to confirm", h("input", { type: "password", name: "password", required: true, autocomplete: "current-password" }))],
+        `Update to ${u.latest}`, async (v) => {
+          const r = await api("admin/update", { method: "POST", body: { password: v.password } });
+          box.replaceChildren(h("h3", {}, "Webmail version"), h("div", { class: "notice ok" }, `Updated to ${r.version}. Reloading…`));
+          setTimeout(() => location.reload(), 1500);
+        }), again);
+    box.replaceChildren(...parts);
+  };
+  await render(false);
+  return box;
 }
 
 function placeholder() {
@@ -1220,8 +1268,8 @@ const SETTINGS = {
         : h("p", {}, "No addresses yet: add them in GhostParse under Domains.")));
   },
   async "admin-status"() {
-    const s = await api("admin/status");
-    return h("div", {}, h("section", {}, h("h3", {}, "GhostParse"),
+    const [s, update] = await Promise.all([api("admin/status"), updateSection()]);
+    return h("div", {}, update, h("section", {}, h("h3", {}, "GhostParse"),
       s.account && h("p", {}, "Connected to ", h("strong", {}, s.account.name), s.account.plan ? ` (${s.account.plan} plan)` : ""),
       s.problems.length ? h("div", { class: "notice warn" }, s.problems.map((p) => h("div", {}, p))) : h("div", { class: "notice ok" }, "Everything's working.")));
   },
