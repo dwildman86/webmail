@@ -8,6 +8,10 @@ namespace Webmail;
  * <api_url>/downloads/webmail-latest.json (version, zip, SHA-256, notes); this checks it now and then, and on request
  * downloads the zip, checks it, and copies the new files over these ones.
  *
+ * Every release is signed with GhostParse's release key (Ed25519, kept off its servers: see its deploy/sign-webmail.mjs),
+ * over its version and the zip's SHA-256. A release that isn't signed by one of RELEASE_KEYS is never installed, so a
+ * taken-over server, domain or certificate can't push code to webmails.
+ *
  * Kept: config.php, setup-preset.php and storage/ (the settings, the encryption key and uploaded files). Every file
  * that's replaced is copied to storage/updates/backup-<old version>/ first, and if anything goes wrong part way, the
  * old files are put back. The database is brought up to date by the next request, as after a manual upload.
@@ -19,14 +23,43 @@ final class Updater
     private const MAX_ZIP_BYTES = 30 * 1024 * 1024;
     /** Never replaced: the settings and what's stored here. */
     private const KEEP = ['config.php', 'config.php.tmp', 'setup-preset.php'];
+    /** The public keys releases are signed with (base64, Ed25519). A new key is added here a release before it's used. */
+    public const RELEASE_KEYS = ['genSq3JLE1H+TbMTAojZk+JlbfNmh8NROWMhGtSVyUc='];
+
+    /** @var string[] */
+    private array $keys;
 
     /** @var callable(string): array{0: int, 1: string} Fetches a URL: [status, body]. Tests replace it. */
     private $fetch;
 
-    public function __construct(private App $app, private ?string $root = null, ?callable $fetch = null)
+    /** @param string[]|null $keys Tests sign with their own key. */
+    public function __construct(private App $app, private ?string $root = null, ?callable $fetch = null, ?array $keys = null)
     {
         $this->root ??= dirname(__DIR__);
         $this->fetch = $fetch ?? [$this, 'get'];
+        $this->keys = $keys ?? self::RELEASE_KEYS;
+    }
+
+    /** What a release's signature covers: its version and its zip, so an old release can't be passed off as a new one. */
+    public static function signed(string $version, string $sha256): string
+    {
+        return "ghostparse-webmail\n$version\n$sha256\n";
+    }
+
+    /** Whether a release was signed with one of the release keys. */
+    private function signedByGhostParse(string $version, string $sha256, string $signature): bool
+    {
+        $sig = base64_decode($signature, true);
+        if ($sig === false || strlen($sig) !== SODIUM_CRYPTO_SIGN_BYTES) {
+            return false;
+        }
+        foreach ($this->keys as $key) {
+            $pk = base64_decode($key, true);
+            if ($pk !== false && strlen($pk) === SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES && sodium_crypto_sign_verify_detached($sig, self::signed($version, $sha256), $pk)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function manifestUrl(): string
@@ -66,6 +99,9 @@ final class Updater
         if (!is_array($m) || !preg_match('/^\d+\.\d+\.\d+$/', (string) ($m['version'] ?? '')) || !preg_match('/^[a-f0-9]{64}$/', (string) ($m['sha256'] ?? ''))
             || !preg_match('#^https://#', (string) ($m['url'] ?? '')) && !$this->app->config->get('update_allow_http', false)) {
             throw new HttpError(502, "Couldn't check for updates at GhostParse" . ($status ? " (it answered $status)" : '') . '.', 'update_check_failed');
+        }
+        if (!$this->signedByGhostParse($m['version'], $m['sha256'], (string) ($m['signature'] ?? ''))) {
+            throw new HttpError(502, "Webmail {$m['version']} isn't signed by GhostParse, so it won't be installed. Nothing was changed.", 'signature');
         }
         return ['version' => $m['version'], 'url' => (string) $m['url'], 'sha256' => $m['sha256'], 'size' => (int) ($m['size'] ?? 0),
             'notes' => mb_substr((string) ($m['notes'] ?? ''), 0, 4000)];

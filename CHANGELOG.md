@@ -3,6 +3,9 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.8.1
+- Updates are signed: the webmail only installs a release signed with GhostParse's release key.
+
 ## 1.8.0
 - Update with one click: administrators see when a new version is out, and update it under Settings → Status.
 - Release notes like these, shown before you update.

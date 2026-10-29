@@ -152,6 +152,10 @@ and **Settings → Status** shows the new version and what's new, with **Update*
 downloads the zip from GhostParse (`<api_url>/downloads/webmail-latest.json` says which, with its SHA-256), checks
 it, and copies the new files over these ones:
 
+- From 1.8.1, only a release signed with GhostParse's release key is installed. The key is kept off GhostParse's
+  servers; the webmail holds its public key (`Updater::RELEASE_KEYS`), and the signature covers the version and the
+  zip's SHA-256. So even someone who took over GhostParse's server or domain couldn't push code to your webmail.
+
 - `config.php`, `setup-preset.php` and `storage/` are never replaced.
 - Each file that's replaced is kept in `storage/updates/backup-<old version>/`. If a copy fails part way, every file
   is put back as it was.
@@ -163,7 +167,8 @@ it, and copies the new files over these ones:
 applied automatically the next time anyone opens the webmail.
 
 **Releasing (for the GhostParse platform):** add the version's notes to `CHANGELOG.md`, set the version in
-`app/App.php` and `sw.js`, then on the platform run `sh deploy/publish-webmail.sh /path/to/webmail`, commit, package
+`app/App.php` and `sw.js`, then on the platform run `sh deploy/publish-webmail.sh /path/to/webmail` (it signs the zip with the
+release key, so run it where that key is), commit, package
 and deploy. Installed webmails see it within 12 hours, or straight away with **Check again**.
 
 ## Troubleshooting

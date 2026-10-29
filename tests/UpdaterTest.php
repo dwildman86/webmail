@@ -11,6 +11,16 @@ final class UpdaterTest extends TestCase
 {
     private string $root;
     private array $web = [];
+    /** The release key these tests sign with, in place of GhostParse's. */
+    private static string $secret = '';
+    private static string $public = '';
+
+    public static function setUpBeforeClass(): void
+    {
+        $pair = sodium_crypto_sign_keypair();
+        self::$secret = sodium_crypto_sign_secretkey($pair);
+        self::$public = base64_encode(sodium_crypto_sign_publickey($pair));
+    }
 
     protected function setUp(): void
     {
@@ -30,7 +40,7 @@ final class UpdaterTest extends TestCase
         parent::tearDown();
     }
 
-    private function release(array $files, string $version = '9.9.9'): string
+    private function release(array $files, string $version = '9.9.9', ?string $signature = null): string
     {
         $zipFile = tempnam(sys_get_temp_dir(), 'wmzip');
         $zip = new \ZipArchive();
@@ -44,7 +54,8 @@ final class UpdaterTest extends TestCase
         $api = rtrim($this->config['ghostparse']['api_url'], '/');
         $this->web = [
             "$api/downloads/webmail-latest.json" => [200, json_encode(['version' => $version, 'url' => "https://gp.example/downloads/webmail-$version.zip",
-                'sha256' => hash('sha256', $bytes), 'size' => strlen($bytes), 'notes' => '- Faster search']) ?: ''],
+                'sha256' => hash('sha256', $bytes), 'size' => strlen($bytes), 'notes' => '- Faster search',
+                'signature' => $signature ?? base64_encode(sodium_crypto_sign_detached(Updater::signed($version, hash('sha256', $bytes)), self::$secret))]) ?: ''],
             "https://gp.example/downloads/webmail-$version.zip" => [200, $bytes],
         ];
         return $bytes;
@@ -52,7 +63,7 @@ final class UpdaterTest extends TestCase
 
     private function updater(): Updater
     {
-        return new Updater($this->app, $this->root, fn (string $url) => $this->web[$url] ?? [404, '']);
+        return new Updater($this->app, $this->root, fn (string $url) => $this->web[$url] ?? [404, ''], [self::$public]);
     }
 
     private function goodFiles(string $version = '9.9.9'): array
@@ -98,6 +109,38 @@ final class UpdaterTest extends TestCase
             $this->assertSame('checksum', $e->errorCode);
         }
         $this->assertSame('old js', file_get_contents("$this->root/assets/app.js"));
+    }
+
+    public function testOnlyAReleaseSignedWithTheReleaseKeyIsInstalled(): void
+    {
+        $other = sodium_crypto_sign_secretkey(sodium_crypto_sign_keypair());
+        $bytes = $this->release($this->goodFiles());
+        $sha = hash('sha256', $bytes);
+        foreach ([
+            'unsigned' => '',
+            'not base64' => '!!!',
+            'signed with another key' => base64_encode(sodium_crypto_sign_detached(Updater::signed('9.9.9', $sha), $other)),
+            // A real signature, but for an older release: the version can't be swapped.
+            'signed for another version' => base64_encode(sodium_crypto_sign_detached(Updater::signed('9.9.8', $sha), self::$secret)),
+            'signed for another zip' => base64_encode(sodium_crypto_sign_detached(Updater::signed('9.9.9', hash('sha256', 'x')), self::$secret)),
+        ] as $case => $signature) {
+            $this->release($this->goodFiles(), '9.9.9', $signature);
+            $check = $this->updater()->check(true);
+            $this->assertFalse($check['available'], "$case: offered");
+            $this->assertStringContainsString("isn't signed by GhostParse", $check['error'] ?? '', $case);
+            try {
+                $this->updater()->install();
+                $this->fail("installed a release $case");
+            } catch (HttpError $e) {
+                $this->assertSame('signature', $e->errorCode, $case);
+            }
+            $this->assertSame('old js', file_get_contents("$this->root/assets/app.js"), $case);
+        }
+        // GhostParse's own key is built in.
+        $this->assertNotEmpty(Updater::RELEASE_KEYS);
+        foreach (Updater::RELEASE_KEYS as $key) {
+            $this->assertSame(SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES, strlen((string) base64_decode($key, true)));
+        }
     }
 
     public function testAZipThatReachesOutsideTheFolderOrIsntTheWebmailIsRefused(): void
