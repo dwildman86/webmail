@@ -21,7 +21,7 @@ final class MfaTest extends TestCase
         }
     }
 
-    /** Signs in with the password and sets up an authenticator app; returns [uid, secret, recovery codes]. */
+    /** Signs in with the password and sets up an authenticator app; returns [uid, secret, recovery codes, the step set up with]. */
     private function enrolled(): array
     {
         $_SESSION = [];
@@ -30,8 +30,9 @@ final class MfaTest extends TestCase
         $auth->login('sam@acme.test', 'correct horse battery', '203.0.113.1');
         $mfa = new Mfa($this->app);
         $setup = $mfa->beginSetup('sam@acme.test');
-        $codes = $mfa->confirmSetup($uid, Mfa::code($setup['secret'], intdiv(time(), 30)));
-        return [$uid, $setup['secret'], $codes];
+        $step = intdiv(time(), 30);
+        $codes = $mfa->confirmSetup($uid, Mfa::code($setup['secret'], $step));
+        return [$uid, $setup['secret'], $codes, $step];
     }
 
     public function testTotpMatchesTheRfcAndAuthenticatorAppsCanScanTheSetup(): void
@@ -87,14 +88,14 @@ final class MfaTest extends TestCase
 
     public function testCodesWorkOnceAndGuessingIsCutOff(): void
     {
-        [$uid, $secret, $codes] = $this->enrolled();
+        [$uid, $secret, $codes, $now] = $this->enrolled();
         $mfa = new Mfa($this->app);
         $auth = new Auth($this->app);
         $auth->login('sam@acme.test', 'correct horse battery', '203.0.113.1');
         $this->assertSame('verify', $auth->pending()['stage']);
 
-        // The code used to set up can't be used again; the next one can, once.
-        $now = intdiv(time(), 30);
+        // The code used to set up can't be used again; the next one can, once. (The step it was set up with, not the
+        // clock now: a 30-second boundary can pass in between.)
         $this->failsWith('invalid_code', fn () => $mfa->verify($uid, Mfa::code($secret, $now)));
         $this->assertSame('totp', $mfa->verify($uid, Mfa::code($secret, $now + 1)));
         $this->failsWith('invalid_code', fn () => $mfa->verify($uid, Mfa::code($secret, $now + 1)));
