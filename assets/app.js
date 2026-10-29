@@ -451,16 +451,101 @@ function renderList() {
   }
   const rows = state.messages.map((m) => {
     const person = state.folder === "sent" || state.folder === "drafts" || m.folder === "sent" || m.folder === "drafts" ? (m.to[0] || m.from) : m.from;
-    return h("div", { class: `msg${m.read ? "" : " unread"}${state.selected === m.id ? " on" : ""}`, role: "listitem", tabindex: "0", dataset: { id: String(m.id) },
+    return swipeable(m, h("div", { class: `msg${m.read ? "" : " unread"}${state.selected === m.id ? " on" : ""}`, role: "listitem", tabindex: "0", dataset: { id: String(m.id) },
       onclick: () => (m.folder === "drafts" ? openDraft(m) : openMessage(m.id)),
       onkeydown: (e) => { if (e.key === "Enter") (m.folder === "drafts" ? openDraft(m) : openMessage(m.id)); } },
     avatar(person),
     h("div", { class: "from" }, (m.folder === "sent" || m.folder === "drafts") ? `To: ${who(person)}` : who(person)),
     h("div", { class: "date" }, shortDate(m.date)),
     h("div", { class: "line" }, h("span", { class: "subject" }, m.subject || "(no subject)"), h("span", { class: "snippet" }, m.snippet ? `— ${m.snippet}` : ""),
-      h("span", { class: "flags" }, m.has_attachments && icon("clip"), m.starred && h("span", { class: "star" }, icon("star")), m.auth === "fail" && h("span", { class: "pill bad", title: "Failed SPF, DKIM and DMARC: be careful" }, "unverified"))));
+      h("span", { class: "flags" }, m.has_attachments && icon("clip"), m.starred && h("span", { class: "star" }, icon("star")), m.auth === "fail" && h("span", { class: "pill bad", title: "Failed SPF, DKIM and DMARC: be careful" }, "unverified")))));
   });
   $list.replaceChildren(...rows, ...(state.hasMore ? [h("button", { class: "btn more", onclick: () => { state.page += 1; loadList(true); } }, "Load more")] : []));
+}
+
+// On touch screens, swipe an email right to delete it or left to archive it. Past the line it goes, with Undo; short of
+// it, it springs back. Up and down still scroll the list (touch-action: pan-y), and a swipe never opens the email.
+function swipeable(m, row) {
+  const can = { trash: m.folder !== "trash" && m.folder !== "drafts", archive: m.folder === "inbox" || m.folder === "spam" };
+  if (!can.trash && !can.archive) return row;
+  const wrap = h("div", { class: "swipe" },
+    h("div", { class: "swipe-bg", "aria-hidden": "true" },
+      h("span", { class: "swipe-trash" }, icon("trash"), "Delete"), h("span", { class: "swipe-archive" }, "Archive", icon("archive"))),
+    row);
+  let start = null, dx = 0, swiped = false;
+  const target = (d) => (d > 0 ? "trash" : "archive");
+  const line = () => Math.min(120, row.offsetWidth * 0.35);
+  const reset = () => {
+    row.style.transition = "transform .2s ease-out";
+    row.style.transform = "";
+    wrap.classList.remove("swiping", "armed");
+    start = null;
+  };
+  row.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" || !e.isPrimary) return;
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId, dragging: false };
+    dx = 0;
+  });
+  row.addEventListener("pointermove", (e) => {
+    if (!start || e.pointerId !== start.id) return;
+    let d = e.clientX - start.x;
+    if (!start.dragging) {
+      // Only a mostly sideways move is a swipe; anything else is left to the browser.
+      if (Math.abs(e.clientY - start.y) > 10 && Math.abs(e.clientY - start.y) > Math.abs(d)) { start = null; return; }
+      if (Math.abs(d) < 12) return;
+      start.dragging = true;
+      row.setPointerCapture(e.pointerId);
+      row.style.transition = "none";
+      wrap.classList.add("swiping");
+    }
+    if (!can[target(d)]) d /= 5; // Can't go that way here: it barely moves.
+    dx = d;
+    row.style.transform = `translateX(${dx}px)`;
+    wrap.dataset.side = target(dx);
+    const armed = can[target(dx)] && Math.abs(dx) > line();
+    if (armed !== wrap.classList.contains("armed")) {
+      wrap.classList.toggle("armed", armed);
+      if (armed) navigator.vibrate?.(8);
+    }
+  });
+  row.addEventListener("pointerup", (e) => {
+    if (!start || e.pointerId !== start.id) return;
+    if (!start.dragging) { start = null; return; }
+    swiped = true;
+    setTimeout(() => { swiped = false; }, 400);
+    const folder = target(dx);
+    if (!can[folder] || Math.abs(dx) <= line()) { reset(); return; }
+    start = null;
+    row.style.transition = "transform .18s ease-in";
+    row.style.transform = `translateX(${dx > 0 ? 100 : -100}%)`;
+    setTimeout(() => {
+      wrap.style.height = `${wrap.offsetHeight}px`;
+      void wrap.offsetHeight; // starts the collapse from its full height
+      wrap.classList.add("gone");
+      wrap.style.height = "0";
+    }, 180);
+    swipeMove(m, folder);
+  });
+  row.addEventListener("pointercancel", () => { if (start?.dragging) reset(); start = null; });
+  // The tap that ends a swipe isn't a click on the email.
+  wrap.addEventListener("click", (e) => { if (swiped) { e.stopPropagation(); e.preventDefault(); } }, true);
+  return wrap;
+}
+
+async function swipeMove(m, folder) {
+  const from = m.folder;
+  state.messages = state.messages.filter((x) => x.id !== m.id);
+  if (state.selected === m.id) { state.selected = null; current = null; $shell.classList.remove("reading"); $reader.replaceChildren(placeholder()); }
+  setTimeout(renderList, 400);
+  try {
+    await api("messages/update", { method: "POST", body: { ids: [m.id], folder } });
+  } catch (err) {
+    toast(err.message);
+    refresh();
+    return;
+  }
+  toast(folder === "trash" ? "Moved to Trash" : "Archived", { label: "Undo", run: async () => { await api("messages/update", { method: "POST", body: { ids: [m.id], folder: from } }); refresh(); } });
+  refreshCounts();
 }
 
 async function refresh() {

@@ -124,7 +124,7 @@ textarea.config { width: 100%; font: 12px/1.4 var(--mono); padding: 10px; border
 .list-title { padding: 10px 16px 6px; display: flex; align-items: baseline; justify-content: space-between; }
 .list-title h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
 .messages { overflow-y: auto; flex: 1; }
-.msg { display: grid; grid-template-columns: 40px 1fr auto; gap: 4px 10px; padding: 12px 14px 12px 12px; border-bottom: 1px solid var(--line); cursor: pointer; position: relative; }
+.msg { display: grid; grid-template-columns: 40px 1fr auto; gap: 4px 10px; padding: 12px 14px 12px 12px; border-bottom: 1px solid var(--line); cursor: pointer; position: relative; background: var(--panel); }
 .msg:hover { background: var(--panel-2); }
 .msg.on { background: var(--accent-soft); }
 .msg.unread::before { content: ""; position: absolute; left: 4px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: var(--accent); }
@@ -292,6 +292,20 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
 .book-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .book-actions .btn svg { width: 15px; height: 15px; }
 .book-note { margin: 4px 0 6px; }
+/* Swipe right to delete, left to archive (touch screens). The colour shows behind the email as it moves. */
+.swipe { position: relative; overflow: hidden; }
+.swipe > .msg { touch-action: pan-y; }
+.swipe-bg { position: absolute; inset: 0 0 1px; display: none; align-items: center; justify-content: space-between; padding: 0 22px; color: #fff; font-weight: 600; font-size: 14px; }
+.swipe-bg span { display: flex; align-items: center; gap: 8px; transition: transform .15s ease-out; }
+.swipe-bg svg { width: 20px; height: 20px; }
+.swipe.swiping .swipe-bg, .swipe.gone .swipe-bg { display: flex; }
+.swipe[data-side="trash"] .swipe-bg { background: #dc2626; }
+.swipe[data-side="archive"] .swipe-bg { background: #2563eb; justify-content: flex-end; }
+.swipe[data-side="trash"] .swipe-archive, .swipe[data-side="archive"] .swipe-trash { display: none; }
+.swipe:not(.armed) .swipe-bg { filter: saturate(.45) brightness(.9); }
+.swipe.armed .swipe-bg span { transform: scale(1.12); }
+.swipe.gone { transition: height .18s ease-out; }
+@media (prefers-reduced-motion: reduce) { .swipe.gone { transition: none; } }
 .msg.contact { grid-template-rows: auto auto; }
 .contact-card { max-width: 640px; }
 .contact-head { display: flex; gap: 16px; align-items: center; margin-bottom: 18px; }

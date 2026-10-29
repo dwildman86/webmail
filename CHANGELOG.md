@@ -3,6 +3,9 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.8.2
+- On phones, swipe an email right to delete it or left to archive it, with Undo.
+
 ## 1.8.1
 - Updates are signed: the webmail only installs a release signed with GhostParse's release key.
 
