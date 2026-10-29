@@ -2,10 +2,10 @@
 // notifications arrive even when the webmail isn't open.
 "use strict";
 
-const VERSION = "wm-1.8.2";
+const VERSION = "wm-1.8.3";
 const SHELL = `${VERSION}-shell`;
 const MAIL = `${VERSION}-mail`;
-const SHELL_FILES = ["./", "assets/app.css?v=1.8.2", "assets/app.js?v=1.8.2", "assets/pwa.js?v=1.8.2", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
+const SHELL_FILES = ["./", "assets/app.css?v=1.8.3", "assets/app.js?v=1.8.3", "assets/pwa.js?v=1.8.3", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
 // API reads worth keeping for offline: the session, the lists and the messages you open.
 const OFFLINE_READS = new Set(["session", "messages", "message", "body", "contacts", "book"]);
 

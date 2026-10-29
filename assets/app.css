@@ -254,6 +254,17 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
   @keyframes scrim-in { from { opacity: 0; } }
   .msg .subject { max-width: none; flex: 1; }
   .msg .snippet { display: none; }
+  /* The installed app runs under the status bar (and, from iOS 26, its blurred edge): the top bars start below it, on a
+     solid background that fills the space behind it, and the bottom bars stay above the home indicator. */
+  .list-head, .reader-bar, .compose-head, .dialog-head { padding-top: calc(10px + env(safe-area-inset-top)); }
+  .side { padding-top: calc(14px + env(safe-area-inset-top)); padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .compose-foot { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .reader-body { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+  /* The email's buttons: full-strength and finger-sized, not faint. */
+  .reader-bar { gap: 2px; padding-left: 6px; padding-right: 6px; padding-bottom: 8px; }
+  .reader-bar .icon-btn { flex: 0 1 40px; min-width: 30px; width: auto; height: 40px; color: var(--text); }
+  .reader-bar .icon-btn.on { color: var(--star); }
+  .reader-bar .icon-btn svg { width: 21px; height: 21px; }
 }
 @media (min-width: 901px) { .menu-btn { display: none; } }
 .scrim { display: none; }
