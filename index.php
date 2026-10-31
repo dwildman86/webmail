@@ -24,7 +24,9 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex, nofollow">
-  <meta name="theme-color" content="#2563eb">
+  <!-- The colour iOS and Android paint behind the status bar: the top bar's own, in light and dark. -->
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#151a22" media="(prefers-color-scheme: dark)">
   <title><?= $name ?></title>
   <link rel="manifest" href="manifest.php">
   <link rel="icon" href="assets/icons/icon.svg" type="image/svg+xml">

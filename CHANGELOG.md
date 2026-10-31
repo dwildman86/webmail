@@ -3,6 +3,9 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.8.4
+- On phones, the strip behind the status bar matches the app (white, or dark in dark mode) instead of blue.
+
 ## 1.8.3
 - On iPhones, the installed app's top bars sit below the status bar instead of under it, and the email's buttons are clearer and easier to tap.
 
