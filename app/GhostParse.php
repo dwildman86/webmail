@@ -88,6 +88,12 @@ final class GhostParse
         return $this->request('PATCH', '/v1/domains/' . rawurlencode($domainId), $fields);
     }
 
+    /** POST /v1/domains/{id}/addresses: a new address on one of the account's domains. Returns it. */
+    public function addAddress(string $domainId, array $fields): array
+    {
+        return $this->request('POST', '/v1/domains/' . rawurlencode($domainId) . '/addresses', $fields);
+    }
+
     public function updateAddress(string $domainId, string $addressId, array $fields): array
     {
         return $this->request('PATCH', '/v1/domains/' . rawurlencode($domainId) . '/addresses/' . rawurlencode($addressId), $fields);

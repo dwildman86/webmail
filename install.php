@@ -236,8 +236,24 @@ if ($step === 'mailboxes') {
         header('Location: install.php?step=admin');
         exit;
     }
+    $client = new GhostParse($s['gp']['api_url'], $s['gp']['api_key']);
+    // A new address, made at GhostParse now: it's added to the list, ticked.
+    $addError = null;
+    if ($post && ($_POST['action'] ?? '') === 'add') {
+        try {
+            $made = Installer::createAddress($client, (string) ($_POST['domain'] ?? ''), (string) ($_POST['local_part'] ?? ''));
+            $s['picked'] = array_values(array_unique(array_merge((array) ($_POST['addresses'] ?? []), [$made])));
+            header('Location: install.php?step=mailboxes');
+            exit;
+        } catch (InstallError $ex) {
+            $addError = $ex->getMessage();
+            $s['picked'] = (array) ($_POST['addresses'] ?? []);
+            $post = false;
+        }
+    }
     try {
-        $addresses = Installer::addresses(new GhostParse($s['gp']['api_url'], $s['gp']['api_key']));
+        $addresses = Installer::addresses($client);
+        $domains = Installer::domains($client);
     } catch (InstallError $ex) {
         page('Mailboxes', '<h1>Mailboxes</h1><div class="notice bad">' . $e($ex->getMessage()) . '</div><a class="btn" href="install.php?step=mailboxes">Try again</a>', 4);
     }
@@ -261,15 +277,33 @@ if ($step === 'mailboxes') {
             . '<a class="btn btn-primary" href="./">Open your webmail</a>', 5);
     }
     $rows = '';
+    $picked = isset($s['picked']) ? array_map('strtolower', $s['picked']) : null;
     foreach ($addresses as $a) {
         $notes = array_filter([$a['note'] ? ucfirst($a['note']) . '.' : '',
             $a['webhook'] && $a['webhook'] !== $s['admin']['base_url'] . '/webhook.php' ? 'Its email goes to ' . $a['webhook'] . ' now; that stops.' : '']);
-        $rows .= '<label class="check address"><input type="checkbox" name="addresses[]" value="' . $e($a['address']) . '" checked><span>' . $e($a['address'])
+        $rows .= '<label class="check address"><input type="checkbox" name="addresses[]" value="' . $e($a['address']) . '"' . ($picked === null || in_array(strtolower($a['address']), $picked, true) ? ' checked' : '') . '><span>' . $e($a['address'])
             . ($notes ? '<small class="muted">' . $e(implode(' ', $notes)) . '</small>' : '') . '</span></label>';
     }
-    page('Mailboxes', '<h1>Your mailboxes</h1><p>Choose the GhostParse addresses to read and send from here. Each one\'s webhook is pointed at this webmail.</p>'
-        . '<form method="post">' . $csrf . ($rows ?: '<p class="muted">Your account has no addresses yet: add them in GhostParse under Domains, or later here.</p>')
-        . '<button class="btn btn-primary">Install</button></form>', 4);
+    // Adding an address: one of the account's domains, and the part before the @. It's the same form as the list
+    // (so what's ticked is kept), sent with action=add.
+    $add = '';
+    if ($domains) {
+        $options = '';
+        foreach ($domains as $d) {
+            $options .= '<option value="' . $e($d['id']) . '"' . (($_POST['domain'] ?? '') === $d['id'] ? ' selected' : '') . '>@' . $e($d['name']) . ($d['ready'] ? '' : ' (not receiving yet)') . '</option>';
+        }
+        $add = '<fieldset class="add-address"><legend>Add a new address</legend>'
+            . ($addError ? '<div class="notice bad">' . $e($addError) . '</div>' : '')
+            . '<div class="row"><label class="field grow">Address<input name="local_part" placeholder="sales" autocomplete="off" autocapitalize="none" spellcheck="false" value="' . $e($addError ? ($_POST['local_part'] ?? '') : '') . '"></label>'
+            . '<label class="field grow">Domain<select name="domain">' . $options . '</select></label></div>'
+            . '<button class="btn" name="action" value="add" formnovalidate>Add address</button>'
+            . '<p class="muted small">It\'s made in your GhostParse account now, able to send and receive, and ticked above.</p></fieldset>';
+    }
+    $none = $domains ? '<p class="muted">Your account has no addresses yet: add one below.</p>'
+        : '<p class="muted">Your account has no domains yet: add one in GhostParse under Domains, then reload this page. Or install now and add mailboxes later, under Settings.</p>';
+    page('Mailboxes', '<h1>Your mailboxes</h1><p>Choose the GhostParse addresses to read and send from here, or add new ones. Each one\'s webhook is pointed at this webmail.</p>'
+        . '<form method="post">' . $csrf . ($rows ?: $none) . $add
+        . '<button class="btn btn-primary" name="action" value="install">Install</button></form>', 4);
 }
 
 header('Location: install.php');

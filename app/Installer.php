@@ -104,6 +104,49 @@ final class Installer
         return $addresses;
     }
 
+    /** The account's domains, to add a new address on: id, name, and whether it receives email yet. */
+    public static function domains(GhostParse $gp): array
+    {
+        try {
+            return array_map(fn ($d) => ['id' => (string) $d['id'], 'name' => (string) $d['name'], 'ready' => (bool) ($d['inbound_ready'] ?? false)], $gp->domains());
+        } catch (GhostParseError $ex) {
+            throw new InstallError("Couldn't read your GhostParse domains: " . $ex->getMessage());
+        }
+    }
+
+    /**
+     * Make a new address on one of the account's domains at GhostParse, receiving and sending, and return it. The part
+     * before the @ is checked here first; "sales@acme.com" is taken as "sales" when acme.com is the domain chosen.
+     */
+    public static function createAddress(GhostParse $gp, string $domainId, string $localPart): string
+    {
+        $domain = null;
+        foreach (self::domains($gp) as $d) {
+            if ($d['id'] === $domainId) {
+                $domain = $d;
+            }
+        }
+        if (!$domain) {
+            throw new InstallError('Choose one of your domains.');
+        }
+        $local = mb_strtolower(trim($localPart));
+        if (str_ends_with($local, '@' . mb_strtolower($domain['name']))) {
+            $local = substr($local, 0, -strlen('@' . $domain['name']));
+        }
+        if ($local === '') {
+            throw new InstallError('Enter the part before the @, like sales or hello.');
+        }
+        if (!preg_match('/^[a-z0-9](?:[a-z0-9._+-]{0,62}[a-z0-9])?$/', $local) || str_contains($local, '..')) {
+            throw new InstallError("\"$local\" can't be an address: use letters, numbers, dots, dashes, underscores or +, starting and ending with a letter or number.");
+        }
+        try {
+            $made = $gp->addAddress($domain['id'], ['local_part' => $local, 'can_receive' => true, 'can_send' => true]);
+        } catch (GhostParseError $ex) {
+            throw new InstallError("GhostParse didn't add $local@{$domain['name']}: " . $ex->getMessage());
+        }
+        return mb_strtolower((string) ($made['address'] ?? "$local@{$domain['name']}"));
+    }
+
     /**
      * Create the tables and the administrator, connect the chosen addresses (each one's webhook pointed here), and
      * write config.php. On failure, the tables made are removed so it can be run again.

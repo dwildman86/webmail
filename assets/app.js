@@ -1340,7 +1340,7 @@ const SETTINGS = {
         "Add user", async (v) => { await api("admin/users", { method: "POST", body: { ...v, mailbox_ids: pickBoxes(v) } }); toast("User added."); openSettings("admin-users"); })));
   },
   async "admin-mailboxes"() {
-    const { addresses } = await api("admin/addresses");
+    const { addresses, domains = [] } = await api("admin/addresses");
     const rows = addresses.map((a) => h("tr", {}, h("td", {}, a.address, (!a.inbound_ready || !a.sending_ready) && h("div", { class: "muted small" }, [!a.inbound_ready && "not receiving yet", !a.sending_ready && "not verified for sending"].filter(Boolean).join(" · "))),
       h("td", {}, a.connected ? h("span", { class: "pill" }, "connected") : ""),
       h("td", {}, h("button", { class: "btn btn-sm", onclick: async (e) => {
@@ -1350,7 +1350,16 @@ const SETTINGS = {
     return h("div", {}, h("section", {}, h("h3", {}, "Your GhostParse addresses"),
       h("p", { class: "muted" }, "Connecting an address makes it a mailbox here: it can send and receive, and its webhook is pointed at this webmail. You get access to it; give other users access under Users."),
       addresses.length ? h("table", { class: "list" }, h("tr", {}, h("th", {}, "Address"), h("th", {}, ""), h("th", {}, "")), rows)
-        : h("p", {}, "No addresses yet: add them in GhostParse under Domains.")));
+        : h("p", {}, domains.length ? "No addresses yet: add one below." : "No addresses yet: add a domain in GhostParse under Domains first.")),
+      domains.length ? h("section", {}, h("h3", {}, "Add a new address"),
+        h("p", { class: "muted" }, "It's made in your GhostParse account, able to send and receive, and connected here as a mailbox."),
+        formFor([h("div", { class: "row" },
+          h("label", { class: "field grow" }, "Address", h("input", { name: "local_part", placeholder: "sales", required: true, autocomplete: "off", autocapitalize: "none", spellcheck: "false" })),
+          h("label", { class: "field grow" }, "Domain", h("select", { name: "domain_id" }, domains.map((d) => h("option", { value: d.id }, `@${d.name}${d.ready ? "" : " (not receiving yet)"}`)))))],
+        "Add address", async (v) => {
+          const made = await api("admin/addresses", { method: "POST", body: v });
+          toast(`${made.address} delivers here now.`); await refreshCounts(); renderShell(); loadList(); openSettings("admin-mailboxes");
+        })) : null);
   },
   async "admin-status"() {
     const [s, update] = await Promise.all([api("admin/status"), updateSection()]);

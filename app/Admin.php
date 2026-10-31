@@ -40,7 +40,19 @@ final class Admin
             case 'GET admin/mailboxes':
                 Http::json(['mailboxes' => $store->allMailboxes()]);
             case 'GET admin/addresses':
-                Http::json(['addresses' => $this->ghostparseAddresses()]);
+                $domains = $this->app->gp->domains();
+                Http::json(['addresses' => $this->ghostparseAddresses($domains),
+                    'domains' => array_map(fn ($d) => ['id' => $d['id'], 'name' => $d['name'], 'ready' => (bool) ($d['inbound_ready'] ?? false)], $domains)]);
+            // A new address at GhostParse, made a mailbox here straight away.
+            case 'POST admin/addresses':
+                try {
+                    $address = Installer::createAddress($this->app->gp, (string) ($in['domain_id'] ?? ''), (string) ($in['local_part'] ?? ''));
+                } catch (InstallError $e) {
+                    throw new HttpError(422, $e->getMessage(), 'invalid_address');
+                }
+                $id = $this->connectAddress($address, (string) ($in['display_name'] ?? ''));
+                $store->grant($me['id'], $id);
+                Http::json(['id' => $id, 'address' => $address], 201);
             case 'POST admin/mailboxes':
                 $id = $this->connectAddress((string) ($in['address'] ?? ''), (string) ($in['display_name'] ?? ''));
                 $store->grant($me['id'], $id);
@@ -119,11 +131,11 @@ final class Admin
     }
 
     /** The account's addresses on GhostParse, with whether each is a mailbox here already. */
-    public function ghostparseAddresses(): array
+    public function ghostparseAddresses(?array $domains = null): array
     {
         $store = new Mailstore($this->app);
         $out = [];
-        foreach ($this->app->gp->domains() as $d) {
+        foreach ($domains ?? $this->app->gp->domains() as $d) {
             foreach ($d['addresses'] ?? [] as $a) {
                 if (!empty($a['is_pattern'])) {
                     continue;

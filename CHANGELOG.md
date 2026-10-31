@@ -3,6 +3,10 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.8.5
+- Create new email addresses while installing: the Mailboxes step has an Add a new address form (any of your GhostParse domains), and the new address is made at GhostParse, able to send and receive, and ticked.
+- The same in Settings → Connect addresses, for administrators: a new address is made and connected as a mailbox in one go.
+
 ## 1.8.4
 - On phones, the strip behind the status bar matches the app (white, or dark in dark mode) instead of blue.
 
