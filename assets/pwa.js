@@ -154,6 +154,7 @@ window.Notifications = {
     const m = /^#m=(\d+)$/.exec(location.hash);
     if (m) { history.replaceState(null, "", location.pathname); window.Webmail.openMessage(Number(m[1])); }
     if (location.hash === "#compose") { history.replaceState(null, "", location.pathname); document.querySelector(".compose-btn")?.click(); }
+    if (location.hash === "#scheduled") { history.replaceState(null, "", location.pathname); window.Webmail.openFolder("scheduled"); }
   },
 
   async subscription() {

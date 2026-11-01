@@ -22,7 +22,7 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
     protected array $answers = [];
     protected array $config;
     private string $dbName;
-    private \PDO $admin;
+    private ?\PDO $admin = null;
 
     protected function setUp(): void
     {
@@ -56,7 +56,10 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
     protected function tearDown(): void
     {
         App::set(null);
+        // The test object (and its connection) lives until the run ends: close the app's connection now.
+        $this->admin->exec('KILL ' . (int) $this->app->db->value('SELECT CONNECTION_ID()'));
         $this->admin->exec("DROP DATABASE IF EXISTS `{$this->dbName}`");
+        $this->admin = null;
     }
 
     /** An email.received event's data, as GhostParse delivers it. */

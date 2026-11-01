@@ -3,6 +3,14 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.10.0
+- **Templates**: replies you write often, with formatting and placeholders such as {first_name}, {company} and {ticket_id}, filled in from the email you're writing. Type / and a template's shortcut while writing (/refund), press Ctrl+/ (⌘/ on a Mac), or use the Templates button. Your own under Settings → Templates, and shared ones administrators keep for everyone. A placeholder that can't be filled in is pointed out before the email goes.
+- **Undo send**: after Send, the email waits 10 seconds with Undo, to take it back and change it. Choose 5, 20 or 30 seconds, or none, under Settings → Account.
+- **Send later**: the clock beside Send sends it tomorrow morning, Monday or whenever you choose. Scheduled lists what's waiting: send it now, change the time, edit it or delete it. You're notified if one can't be sent.
+- **Snooze**: hide a conversation until later today, tomorrow, the weekend, next week or a time you choose. It comes back to the top of the Inbox, unread. Snoozed lists what's waiting.
+- **Labels and rules**: your own folders and tags for each mailbox, and rules that file new email as it arrives: "if the sender ends with @example.com or the subject contains Invoice, move it to Accounting and label it Billing". Rules can also mark read and star, run in order, and can be run on the Inbox now. Settings → Rules & labels.
+- For exact times on scheduled email when nobody has the webmail open, a cron job can call due.php every minute (optional; see the README).
+
 ## 1.9.0
 For shared mailboxes (ones more than one person reads):
 - **Team notes** on every conversation: private comments only the people who share the mailbox see, never sent to the customer. Type @ to mention someone ("@Sarah please process their refund"); they get a notification and the note stands out for them.

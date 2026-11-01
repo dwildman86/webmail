@@ -116,11 +116,11 @@ final class AddressBook
         $out = [];
         foreach ([[$userId, 'personal'], [self::SHARED, 'shared']] as [$owner, $source]) {
             foreach ($this->list($owner) as $c) {
-                $out[$c['email']] ??= ['email' => $c['email'], 'name' => $c['name'], 'source' => $source];
+                $out[$c['email']] ??= ['email' => $c['email'], 'name' => $c['name'], 'source' => $source, 'company' => $c['company'] ?? ''];
             }
         }
         foreach ((new Mailstore($this->app))->contacts($userId) as $email) {
-            $out[mb_strtolower($email)] ??= ['email' => mb_strtolower($email), 'name' => '', 'source' => 'recent'];
+            $out[mb_strtolower($email)] ??= ['email' => mb_strtolower($email), 'name' => '', 'source' => 'recent', 'company' => ''];
         }
         return array_values($out);
     }

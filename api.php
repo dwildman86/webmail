@@ -57,7 +57,8 @@ try {
             Http::json(['user' => null, 'csrf' => Auth::csrfToken(), 'app' => ['name' => $app->config->get('app_name', 'Webmail'),
                 'passkeys' => (int) $app->db->value('SELECT COUNT(*) FROM {passkeys}') > 0]] + secondStep($auth, $mfa), 401);
         }
-        Http::json(['user' => $user, 'csrf' => Auth::csrfToken(), 'mailboxes' => $store->mailboxesFor($user['id']),
+        Http::json(['user' => $user, 'csrf' => Auth::csrfToken(), 'mailboxes' => $store->mailboxesFor($user['id']), 'prefs' => (new \Webmail\Prefs($app))->get($user['id']),
+            'scheduled' => (int) $app->db->value("SELECT COUNT(*) FROM {scheduled} WHERE user_id = ?", [$user['id']]),
             'app' => ['name' => $app->config->get('app_name', 'Webmail'), 'version' => App::VERSION, 'vapid_public_key' => \Webmail\Notifier::supported() ? (new \Webmail\Notifier($app))->vapid()['public'] : null]]);
     }
     if (class_exists(\Webmail\Passkeys::class) && str_starts_with($action, 'passkey/login')) {
@@ -105,6 +106,8 @@ try {
     if ($method !== 'GET') {
         Auth::checkCsrf();
     }
+    // Scheduled email to send, snoozed email to bring back: done after this answer has gone.
+    \Webmail\Due::afterResponse($app);
 
     switch ("$method $action") {
         case 'GET mfa/status':
@@ -121,7 +124,15 @@ try {
             Http::json(['recovery_codes' => $mfa->newRecoveryCodes($user['id'])]);
         case 'GET messages':
             Http::json($store->list($user['id'], $int('mailbox') ?: null, (string) ($_GET['folder'] ?? 'inbox'), max(1, $int('page')),
-                (string) ($_GET['q'] ?? ''), ($_GET['starred'] ?? '') === '1', (string) ($_GET['team'] ?? '')));
+                (string) ($_GET['q'] ?? ''), ($_GET['starred'] ?? '') === '1', (string) ($_GET['team'] ?? ''), $int('label')));
+        case 'POST messages/snooze':
+            $in = Http::body();
+            $until = ($in['until'] ?? null) === null ? null : \Webmail\Scheduler::time($in['until']);
+            Http::json(['snoozed' => $store->snooze($user['id'], (array) ($in['ids'] ?? []), $until)]);
+        case 'GET prefs':
+            Http::json((new \Webmail\Prefs($app))->get($user['id']));
+        case 'POST prefs':
+            Http::json((new \Webmail\Prefs($app))->save($user['id'], Http::body()));
         case 'GET message':
             Http::json($store->get($user['id'], $int('id'), ($_GET['peek'] ?? '') !== '1'));
         case 'GET body':
@@ -289,6 +300,15 @@ try {
             Http::json(['ok' => true]);
     }
 
+    if ($action === 'templates' || str_starts_with($action, 'templates/')) {
+        (new \Webmail\Templates($app))->route($action, $method, $user);
+    }
+    if ($action === 'scheduled' || str_starts_with($action, 'scheduled/')) {
+        (new \Webmail\Scheduler($app))->route($action, $method, $user);
+    }
+    if ($action === 'rules' || str_starts_with($action, 'rules/') || str_starts_with($action, 'labels/')) {
+        (new \Webmail\Rules($app))->route($action, $method, $user);
+    }
     if (str_starts_with($action, 'team/')) {
         (new \Webmail\Team($app))->route($action, $method, $user);
     }

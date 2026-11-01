@@ -91,9 +91,11 @@ final class Mailstore
             // How many people read it: more than one, and it's a shared mailbox (notes, assignment, replies written together).
             $m['members'] = (int) $this->app->db->value('SELECT COUNT(*) FROM {user_mailboxes} um JOIN {users} u ON u.id = um.user_id WHERE um.mailbox_id = ? AND u.disabled = 0', [$m['id']]);
             $m['unread'] = array_fill_keys(self::FOLDERS, 0);
-            foreach ($this->app->db->all('SELECT folder, COUNT(*) AS n FROM {messages} WHERE mailbox_id = ? AND is_read = 0 GROUP BY folder', [$m['id']]) as $r) {
+            foreach ($this->app->db->all('SELECT folder, COUNT(*) AS n FROM {messages} WHERE mailbox_id = ? AND is_read = 0 AND snoozed_until IS NULL GROUP BY folder', [$m['id']]) as $r) {
                 $m['unread'][$r['folder']] = (int) $r['n'];
             }
+            $m['snoozed'] = (int) $this->app->db->value('SELECT COUNT(*) FROM {messages} WHERE mailbox_id = ? AND snoozed_until IS NOT NULL', [$m['id']]);
+            $m['labels'] = (new Rules($this->app))->labels((int) $m['id'], true);
         }
         return $out;
     }
@@ -151,8 +153,16 @@ final class Mailstore
         }
         $stored = [];
         foreach (array_keys($mailboxIds) as $mailboxId) {
-            $id = $this->storeOne($mailboxId, $data, $this->folderFor($data));
+            $folder = $this->folderFor($data);
+            $id = $this->storeOne($mailboxId, $data, $folder);
             if ($id) {
+                if ($folder === 'inbox') {
+                    try {
+                        (new Rules($this->app))->apply($mailboxId, $id, $data); // file it, tag it: the mailbox's rules
+                    } catch (\Throwable $e) {
+                        error_log('webmail: rules failed: ' . $e->getMessage()); // never lose the email over a rule
+                    }
+                }
                 $stored[] = ['id' => $id, 'mailbox_id' => $mailboxId];
             }
         }
@@ -221,7 +231,7 @@ final class Mailstore
         $id = $db->tx(function (Db $db) use ($c, $mailboxId, $folder, $gpId, $data, $text, $html, $snippet, $meta, $attachments, $files, $date, $read) {
             $id = $db->insert(
                 'INSERT INTO {messages} (mailbox_id, folder, gp_id, thread_key, from_enc, to_enc, subject_enc, snippet_enc, body_enc, meta_enc,
-                    sent_at, is_read, has_attachments, size, auth_verdict, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    sent_at, sort_at, is_read, has_attachments, size, auth_verdict, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [$mailboxId, $folder, $gpId, $data['thread_id'] ?? $data['message_id'] ?? $gpId,
                     $c->encryptJson($data['from'] ?? null, 'messages.from'),
                     $c->encryptJson(['to' => $data['to'] ?? [], 'cc' => $data['cc'] ?? [], 'bcc' => $data['bcc'] ?? [], 'reply_to' => $data['reply_to'] ?? []], 'messages.to'),
@@ -229,7 +239,7 @@ final class Mailstore
                     $c->encrypt($snippet, 'messages.snippet'),
                     $c->encryptJson(['text' => $text, 'html' => $html, 'reply_text' => $data['reply_text'] ?? null], 'messages.body'),
                     $c->encryptJson($meta, 'messages.meta'),
-                    gmdate('Y-m-d H:i:s', $date), $read ? 1 : 0, count($files) > 0 ? 1 : 0, (int) ($data['size'] ?? strlen($text . $html)),
+                    gmdate('Y-m-d H:i:s', $date), gmdate('Y-m-d H:i:s', $date), $read ? 1 : 0, count($files) > 0 ? 1 : 0, (int) ($data['size'] ?? strlen($text . $html)),
                     $data['authentication']['verdict'] ?? null, App::now()],
             );
             foreach ($attachments as $a) {
@@ -272,10 +282,14 @@ final class Mailstore
 
     // ------------------------------------------------------------------------------------------------- reading
 
-    /** A page of a folder (or search results across a mailbox's folders, or all the user's mailboxes). */
-    public function list(int $userId, ?int $mailboxId, string $folder, int $page = 1, string $query = '', bool $starredOnly = false, string $team = ''): array
+    /**
+     * A page of a folder (or search results across a mailbox's folders, or all the user's mailboxes). Two more views:
+     * "snoozed" (soonest back first) and "label" ($labelId's email, wherever it is but Trash and Spam). Snoozed email
+     * is only in search and the snoozed view until it comes back.
+     */
+    public function list(int $userId, ?int $mailboxId, string $folder, int $page = 1, string $query = '', bool $starredOnly = false, string $team = '', int $labelId = 0): array
     {
-        if (!in_array($folder, self::FOLDERS, true) && $folder !== 'all') {
+        if (!in_array($folder, self::FOLDERS, true) && !in_array($folder, ['all', 'snoozed', 'label'], true)) {
             throw new HttpError(422, 'Unknown folder', 'bad_folder');
         }
         $where = ['um.user_id = ?'];
@@ -285,11 +299,22 @@ final class Mailstore
             $where[] = 'm.mailbox_id = ?';
             $params[] = $mailboxId;
         }
-        if ($folder !== 'all') {
-            $where[] = 'm.folder = ?';
+        $order = 'm.sort_at DESC, m.id DESC';
+        if ($folder === 'snoozed') {
+            $where[] = 'm.snoozed_until IS NOT NULL';
+            $order = 'm.snoozed_until, m.id';
+        } elseif ($folder === 'label') {
+            $label = $this->app->db->one('SELECT l.id FROM {labels} l JOIN {user_mailboxes} um ON um.mailbox_id = l.mailbox_id WHERE um.user_id = ? AND l.id = ?', [$userId, $labelId]);
+            if (!$label) {
+                throw new HttpError(404, 'Label not found', 'not_found');
+            }
+            $where[] = "m.id IN (SELECT message_id FROM {message_labels} WHERE label_id = ?) AND m.folder <> 'trash' AND m.folder <> 'spam' AND m.snoozed_until IS NULL";
+            $params[] = $labelId;
+        } elseif ($folder !== 'all') {
+            $where[] = 'm.folder = ? AND m.snoozed_until IS NULL';
             $params[] = $folder;
         } elseif ($query === '') {
-            $where[] = "m.folder <> 'trash' AND m.folder <> 'spam'";
+            $where[] = "m.folder <> 'trash' AND m.folder <> 'spam' AND m.snoozed_until IS NULL";
         }
         if ($starredOnly) {
             $where[] = 'm.is_starred = 1';
@@ -314,15 +339,17 @@ final class Mailstore
         $offset = (max(1, $page) - 1) * self::PAGE;
         $rows = $this->app->db->all(
             "SELECT m.id, m.mailbox_id, m.folder, m.thread_key, m.from_enc, m.to_enc, m.subject_enc, m.snippet_enc, m.sent_at, m.is_read, m.is_starred,
-                m.has_attachments, m.auth_verdict
+                m.has_attachments, m.auth_verdict, m.snoozed_until
              FROM {messages} m $join JOIN {user_mailboxes} um ON um.mailbox_id = m.mailbox_id
-             WHERE " . implode(' AND ', $where) . ' ORDER BY m.sent_at DESC, m.id DESC LIMIT ' . (self::PAGE + 1) . " OFFSET $offset",
+             WHERE " . implode(' AND ', $where) . " ORDER BY $order LIMIT " . (self::PAGE + 1) . " OFFSET $offset",
             $params,
         );
         $more = count($rows) > self::PAGE;
         $rows = array_slice($rows, 0, self::PAGE);
         $team = (new Team($this->app))->forList(array_map(fn ($r) => ['id' => (int) $r['id'], 'mailbox_id' => (int) $r['mailbox_id'], 'thread_key' => $r['thread_key']], $rows));
-        return ['messages' => array_map(fn ($r) => $this->summary($r) + (isset($team[(int) $r['id']]) ? ['team' => $team[(int) $r['id']]] : []), $rows), 'page' => $page, 'has_more' => $more];
+        $labels = (new Rules($this->app))->labelsOf(array_map(fn ($r) => (int) $r['id'], $rows));
+        return ['messages' => array_map(fn ($r) => $this->summary($r) + ['labels' => $labels[(int) $r['id']] ?? []]
+            + (isset($team[(int) $r['id']]) ? ['team' => $team[(int) $r['id']]] : []), $rows), 'page' => $page, 'has_more' => $more];
     }
 
     private function summary(array $r): array
@@ -335,6 +362,7 @@ final class Mailstore
             'subject' => $c->decrypt($r['subject_enc'], 'messages.subject'), 'snippet' => $c->decrypt($r['snippet_enc'], 'messages.snippet'),
             'date' => gmdate('c', strtotime($r['sent_at'] . ' UTC')), 'read' => (bool) $r['is_read'], 'starred' => (bool) $r['is_starred'],
             'has_attachments' => (bool) $r['has_attachments'], 'auth' => $r['auth_verdict'],
+            'snoozed_until' => !empty($r['snoozed_until']) ? gmdate('c', strtotime($r['snoozed_until'] . ' UTC')) : null,
         ];
     }
 
@@ -401,6 +429,7 @@ final class Mailstore
             'message_id' => $meta['message_id'] ?? null, 'references' => $meta['references'] ?? [], 'in_reply_to' => $meta['in_reply_to'] ?? null,
             'authentication' => $meta['authentication'] ?? null, 'spam' => $meta['spam'] ?? null, 'auto_submitted' => $meta['auto_submitted'] ?? null,
             'attachments' => $attachments,
+            'labels' => (new Rules($this->app))->labelsOf([(int) $r['id']])[(int) $r['id']] ?? [],
         ];
     }
 
@@ -442,6 +471,7 @@ final class Mailstore
             }
             $set[] = 'folder = ?';
             $params[] = $changes['folder'];
+            $set[] = 'snoozed_until = NULL'; // moved: not snoozed any more
         }
         if (!$set) {
             return 0;
@@ -466,6 +496,70 @@ final class Mailstore
             "DELETE m FROM {messages} m JOIN {user_mailboxes} um ON um.mailbox_id = m.mailbox_id WHERE um.user_id = ? AND m.id IN ($in) AND m.folder IN ('trash', 'drafts', 'spam')",
             array_merge([$userId], $ids),
         )->rowCount();
+    }
+
+    // ------------------------------------------------------------------------------------------------- snooze
+
+    /**
+     * Snooze messages (gone from their folder until $until, then back in the Inbox, unread, at the top), or with
+     * null bring them back now. Returns how many changed.
+     */
+    public function snooze(int $userId, array $ids, ?\DateTimeInterface $until): int
+    {
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        if (!$ids || count($ids) > 500) {
+            throw new HttpError(422, 'Choose between 1 and 500 messages', 'bad_ids');
+        }
+        $in = implode(', ', array_fill(0, count($ids), '?'));
+        if ($until === null) {
+            return $this->app->db->run(
+                "UPDATE {messages} m JOIN {user_mailboxes} um ON um.mailbox_id = m.mailbox_id SET m.snoozed_until = NULL, m.sort_at = ?
+                 WHERE um.user_id = ? AND m.snoozed_until IS NOT NULL AND m.id IN ($in)",
+                array_merge([App::now(), $userId], $ids),
+            )->rowCount();
+        }
+        $at = $until->getTimestamp();
+        if ($at < time() + 60) {
+            throw new HttpError(422, 'Choose a time in the future', 'bad_time');
+        }
+        if ($at > time() + 366 * 86400) {
+            throw new HttpError(422, 'Snooze for at most a year', 'bad_time');
+        }
+        return $this->app->db->run(
+            "UPDATE {messages} m JOIN {user_mailboxes} um ON um.mailbox_id = m.mailbox_id SET m.snoozed_until = ?
+             WHERE um.user_id = ? AND m.folder NOT IN ('drafts', 'sent', 'trash', 'spam') AND m.id IN ($in)",
+            array_merge([gmdate('Y-m-d H:i:s', $at), $userId], $ids),
+        )->rowCount();
+    }
+
+    /**
+     * Snoozed email whose time has come: back in the Inbox, unread, at the top of the list. Returns the messages that
+     * came back ([id, mailbox_id]), for notifications.
+     */
+    public function wakeSnoozed(int $limit = 200): array
+    {
+        $db = $this->app->db;
+        $rows = $db->all('SELECT id, mailbox_id FROM {messages} WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? ORDER BY snoozed_until LIMIT ' . max(1, $limit), [App::now()]);
+        $woken = [];
+        foreach ($rows as $r) {
+            // Only if it's still snoozed and due (someone may have brought it back meanwhile).
+            $n = $db->run("UPDATE {messages} SET snoozed_until = NULL, folder = 'inbox', is_read = 0, sort_at = ? WHERE id = ? AND snoozed_until IS NOT NULL AND snoozed_until <= ?",
+                [App::now(), $r['id'], App::now()])->rowCount();
+            if ($n) {
+                $woken[] = ['id' => (int) $r['id'], 'mailbox_id' => (int) $r['mailbox_id']];
+            }
+        }
+        return $woken;
+    }
+
+    /** The From and subject of a stored message, for a notification. */
+    public function headline(int $messageId): ?array
+    {
+        $r = $this->app->db->one('SELECT from_enc, subject_enc FROM {messages} WHERE id = ?', [$messageId]);
+        if (!$r) {
+            return null;
+        }
+        return ['from' => $this->c()->decryptJson($r['from_enc'], 'messages.from'), 'subject' => (string) $this->c()->decrypt($r['subject_enc'], 'messages.subject')];
     }
 
     // ------------------------------------------------------------------------------------------------- sending

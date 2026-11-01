@@ -60,6 +60,13 @@ const ICONS = {
   note: "M5 4h14v12l-4 4H5z M15 20v-4h4 M8 9h8 M8 13h5",
   people: "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M2 20a7 7 0 0 1 14 0 M16 4.5a3.5 3.5 0 0 1 0 6.5 M18 14a6 6 0 0 1 4 6",
   assign: "M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M3 20a7 7 0 0 1 11-5.7 M16 17l2 2 4-4",
+  clock: "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18z M12 7v5l3 2",
+  sendLater: "M3 11l14-7-4 9 M3 11l6 2 M9 13l1.5 4.5 M17 13a4 4 0 1 1 0 8 4 4 0 0 1 0-8z M17 15.5V17l1 .8",
+  label: "M3 12V4h8l9 9-8 8z M7.5 8h.01",
+  template: "M5 3h14v18H5z M8 7h8 M8 11h8 M8 15h5",
+  filter: "M4 5h16l-6 8v5l-4 2v-7z",
+  up: "M12 19V5 M6 11l6-6 6 6",
+  down: "M12 5v14 M6 13l6 6 6-6",
 };
 const icon = (name) => h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
   h("path", { d: ICONS[name] }));
@@ -110,9 +117,11 @@ function toast(text, action) {
 }
 
 // ------------------------------------------------------------------------------------------------ state
-const FOLDERS = [["inbox", "Inbox", "inbox"], ["starred", "Starred", "star"], ["sent", "Sent", "sent"], ["drafts", "Drafts", "drafts"],
-  ["archive", "Archive", "archive"], ["spam", "Spam", "spam"], ["trash", "Trash", "trash"]];
-const state = { user: null, mailboxes: [], mailbox: 0, folder: "inbox", query: "", page: 1, messages: [], hasMore: false, selected: null, appInfo: {}, team: "" };
+const FOLDERS = [["inbox", "Inbox", "inbox"], ["starred", "Starred", "star"], ["snoozed", "Snoozed", "clock"], ["sent", "Sent", "sent"], ["drafts", "Drafts", "drafts"],
+  ["scheduled", "Scheduled", "sendLater"], ["archive", "Archive", "archive"], ["spam", "Spam", "spam"], ["trash", "Trash", "trash"]];
+// folder "label": state.label's email. prefs: the person's own settings (Undo send). scheduledCount: emails waiting to be sent.
+const state = { user: null, mailboxes: [], mailbox: 0, folder: "inbox", query: "", page: 1, messages: [], hasMore: false, selected: null, appInfo: {}, team: "",
+  label: 0, prefs: { undo_send: 10 }, scheduledCount: 0 };
 /** Shared mailboxes (more than one person reads them) have notes, assignment and replies written together. */
 const sharedInView = () => state.mailboxes.some((m) => m.members > 1 && (!state.mailbox || m.id === state.mailbox));
 const TEAM_FILTERS = [["", "Everything"], ["mine", "Assigned to me"], ["unassigned", "Unassigned"], ["open", "Open"], ["in_progress", "In progress"], ["resolved", "Resolved"]];
@@ -160,6 +169,8 @@ async function start() {
     state.user = s.user;
     state.mailboxes = s.mailboxes;
     state.appInfo = s.app;
+    state.prefs = s.prefs || state.prefs;
+    state.scheduledCount = s.scheduled || 0;
     renderShell();
     await loadList();
     window.Notifications?.afterSignIn?.(s);
@@ -364,16 +375,35 @@ function renderFolders() {
   $search.placeholder = state.folder === "contacts" ? "Search contacts" : "Search mail";
   $search.setAttribute("aria-label", $search.placeholder);
   $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"]].map(([key, label, ic]) => {
-    const n = key === "starred" ? 0 : unreadFor(key);
+    const n = key === "scheduled" ? state.scheduledCount : ["starred", "snoozed"].includes(key) ? 0 : unreadFor(key);
     return h("li", { class: key === "contacts" ? "sep" : "" }, h("a", { href: "#", class: state.folder === key && !state.query ? "on" : "", onclick: (e) => {
       e.preventDefault();
       openFolder(key);
-    } }, icon(ic), label, n > 0 && key !== "sent" && key !== "drafts" && key !== "trash" ? h("span", { class: "badge" }, n > 99 ? "99+" : String(n)) : null));
-  }));
+    } }, icon(ic), label, n > 0 && key !== "sent" && key !== "drafts" && key !== "trash" ? h("span", { class: `badge${key === "scheduled" ? " quiet" : ""}` }, n > 99 ? "99+" : String(n)) : null));
+  }), ...labelLinks());
 }
 
-function openFolder(key) {
-  state.folder = key; state.query = ""; state.page = 1; $search.value = "";
+/** The labels of the mailboxes in view, under the folders (like folders of their own), with a way to the rules. */
+function labelLinks() {
+  const boxes = state.mailboxes.filter((m) => !state.mailbox || m.id === state.mailbox);
+  const many = boxes.filter((m) => m.labels?.length).length > 1;
+  const links = boxes.flatMap((m) => (m.labels || []).map((l) => h("li", {}, h("a", { href: "#", class: state.folder === "label" && state.label === l.id && !state.query ? "on" : "",
+    title: many ? `${l.name} (${m.address})` : l.name, onclick: (e) => { e.preventDefault(); openFolder("label", l.id); } },
+  icon("label"), h("span", { class: "label-name" }, l.name, many ? h("small", { class: "muted" }, ` ${m.address.split("@")[0]}`) : null),
+  l.unread > 0 ? h("span", { class: "badge" }, l.unread > 99 ? "99+" : String(l.unread)) : null))));
+  if (!state.mailboxes.length) return [];
+  return [h("li", { class: "sep folders-head" }, h("span", {}, "Labels"),
+    h("button", { type: "button", class: "icon-btn small-btn", title: "Rules & labels", "aria-label": "Rules and labels", onclick: () => openSettings("rules") }, icon("filter"))), ...links];
+}
+
+/** A label by id, from the mailboxes' lists: { id, name, mailbox }. */
+function labelById(id) {
+  for (const m of state.mailboxes) for (const l of m.labels || []) if (l.id === id) return { ...l, mailbox: m };
+  return null;
+}
+
+function openFolder(key, label = 0) {
+  state.folder = key; state.label = label; state.query = ""; state.page = 1; $search.value = "";
   $shell.classList.remove("menu", "reading");
   renderFolders(); loadList();
   $list.scrollTop = 0;
@@ -457,15 +487,18 @@ function placeholder() {
 // ------------------------------------------------------------------------------------------------ the list
 async function loadList(append = false) {
   if (state.folder === "contacts") return loadContacts();
+  if (state.folder === "scheduled" && !state.query) return loadScheduled();
+  if (state.folder === "label" && !labelById(state.label)) { state.folder = "inbox"; state.label = 0; renderFolders(); }
   const folder = state.query ? "all" : state.folder === "starred" ? "all" : state.folder;
-  const label = state.query ? `Results for “${state.query}”` : FOLDERS.find((f) => f[0] === state.folder)[1];
-  const teamOn = sharedInView() && !["sent", "drafts"].includes(state.folder);
+  const label = state.query ? `Results for “${state.query}”` : state.folder === "label" ? labelById(state.label).name : FOLDERS.find((f) => f[0] === state.folder)[1];
+  const teamOn = sharedInView() && !["sent", "drafts", "snoozed"].includes(state.folder);
   if (!teamOn) state.team = "";
   $listTitle.replaceChildren(h("h2", {}, label), teamOn ? h("select", { class: "input team-filter", "aria-label": "Show", onchange: (e) => { state.team = e.target.value; state.page = 1; loadList(); } },
     TEAM_FILTERS.map(([v, l]) => h("option", { value: v, selected: state.team === v }, l))) : "");
   if (!append) $list.replaceChildren(h("div", { class: "empty" }, "Loading…"));
   try {
-    const r = await api("messages", { query: { folder, mailbox: String(state.mailbox || ""), page: String(state.page), q: state.query, starred: state.folder === "starred" && !state.query ? "1" : "", team: state.team } });
+    const r = await api("messages", { query: { folder, mailbox: String(state.mailbox || ""), page: String(state.page), q: state.query, starred: state.folder === "starred" && !state.query ? "1" : "", team: state.team,
+      label: state.folder === "label" && !state.query ? String(state.label) : "" } });
     state.messages = append ? state.messages.concat(r.messages) : r.messages;
     state.hasMore = r.has_more;
     renderList();
@@ -476,7 +509,8 @@ async function loadList(append = false) {
 
 function renderList() {
   if (!state.messages.length) {
-    $list.replaceChildren(h("div", { class: "empty" }, icon(state.query ? "search" : "inbox"), h("p", {}, state.query ? "Nothing matches." : "Nothing here.")));
+    $list.replaceChildren(h("div", { class: "empty" }, icon(state.query ? "search" : state.folder === "snoozed" ? "clock" : "inbox"),
+      h("p", {}, state.query ? "Nothing matches." : state.folder === "snoozed" ? "Nothing snoozed. Snooze an email to have it come back to the top of your inbox when you're ready for it." : "Nothing here.")));
     return;
   }
   const rows = state.messages.map((m) => {
@@ -486,14 +520,141 @@ function renderList() {
       onkeydown: (e) => { if (e.key === "Enter") (m.folder === "drafts" ? openDraft(m) : openMessage(m.id)); } },
     avatar(person),
     h("div", { class: "from" }, (m.folder === "sent" || m.folder === "drafts") ? `To: ${who(person)}` : who(person)),
-    h("div", { class: "date" }, shortDate(m.date)),
-    h("div", { class: "line" }, h("span", { class: "subject" }, m.subject || "(no subject)"), h("span", { class: "snippet" }, m.snippet ? `— ${m.snippet}` : ""),
+    m.snoozed_until ? h("div", { class: "date snoozed", title: `Snoozed until ${longDate(m.snoozed_until)}` }, icon("clock"), whenShort(m.snoozed_until)) : h("div", { class: "date" }, shortDate(m.date)),
+    h("div", { class: "line" }, h("span", { class: "subject" }, m.subject || "(no subject)"),
+      ...(m.labels || []).filter((l) => !(state.folder === "label" && l.id === state.label)).map((l) => h("span", { class: "label-pill" }, l.name)),
+      h("span", { class: "snippet" }, m.snippet ? `— ${m.snippet}` : ""),
       h("span", { class: "flags" }, m.has_attachments && icon("clip"), m.starred && h("span", { class: "star" }, icon("star")), m.auth === "fail" && h("span", { class: "pill bad", title: "Failed SPF, DKIM and DMARC: be careful" }, "unverified"))),
     m.team && (m.team.assignee || m.team.status !== "open") && h("div", { class: "team-line" },
       m.team.status !== "open" && h("span", { class: `status-pill ${m.team.status}` }, STATUS_LABELS[m.team.status]),
       m.team.assignee && h("span", { class: `assignee${m.team.assignee_id === state.user.id ? " me" : ""}` }, icon("assign"), m.team.assignee_id === state.user.id ? "You" : m.team.assignee))));
   });
   $list.replaceChildren(...rows, ...(state.hasMore ? [h("button", { class: "btn more", onclick: () => { state.page += 1; loadList(true); } }, "Load more")] : []));
+}
+
+// ------------------------------------------------------------------------------------------------ menus and times
+/** A small menu under a button: items are { label, run } (or a node, or null for a line). Closes on a pick, Escape or a click outside. */
+function popMenu(anchor, items, { className = "" } = {}) {
+  document.querySelector(".pop-menu")?.remove();
+  const close = () => { box.remove(); document.removeEventListener("mousedown", outside, true); document.removeEventListener("keydown", esc, true); };
+  const outside = (e) => { if (!box.contains(e.target)) close(); };
+  const esc = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); anchor.focus?.(); } };
+  const box = h("div", { class: `pop-menu ${className}`, role: "menu" }, items.map((it) => it == null ? h("hr")
+    : it instanceof Node ? it
+      : h("button", { type: "button", role: "menuitem", class: it.class || "", onclick: () => { close(); it.run(); } }, it.icon ? icon(it.icon) : null, h("span", {}, it.label), it.hint ? h("small", { class: "muted" }, it.hint) : null)));
+  document.body.append(box);
+  const r = anchor.getBoundingClientRect();
+  const w = box.offsetWidth, hgt = box.offsetHeight;
+  box.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`;
+  box.style.top = `${r.bottom + hgt + 8 > innerHeight && r.top - hgt - 4 > 0 ? r.top - hgt - 4 : r.bottom + 4}px`;
+  setTimeout(() => { document.addEventListener("mousedown", outside, true); document.addEventListener("keydown", esc, true); });
+  box.querySelector("button, input")?.focus();
+  return { box, close };
+}
+
+const whenShort = (iso) => {
+  const d = new Date(iso), now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return time;
+  const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+  if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow ${time}`;
+  return `${d.toLocaleDateString([], d - now < 6 * 86400000 ? { weekday: "short" } : { day: "numeric", month: "short" })} ${time}`;
+};
+const at = (days, hour, from = new Date()) => { const d = new Date(from); d.setDate(d.getDate() + days); d.setHours(hour, 0, 0, 0); return d; };
+
+/** Times to choose from for snooze or send later, and a date and time of your own. onPick(Date). */
+function pickTime(anchor, kind, onPick) {
+  const now = new Date();
+  const presets = [];
+  if (kind === "snooze") {
+    if (now.getHours() < 18) { const later = new Date(now); later.setHours(now.getHours() + 3, 0, 0, 0); presets.push(["Later today", later]); }
+    presets.push(["Tomorrow", at(1, 8)]);
+    if (now.getDay() >= 1 && now.getDay() <= 4) presets.push(["This weekend", at(6 - now.getDay(), 8)]);
+    presets.push(["Next week", at(((8 - now.getDay()) % 7) || 7, 8)]);
+  } else {
+    presets.push(["Tomorrow morning", at(1, 8)], ["Tomorrow afternoon", at(1, 13)]);
+    if (now.getDay() !== 1) presets.push(["Monday morning", at(((8 - now.getDay()) % 7) || 7, 8)]);
+  }
+  // The same time twice (on a Sunday, tomorrow is next week): only the first.
+  const seen = new Set();
+  const unique = presets.filter(([, d]) => !seen.has(d.getTime()) && seen.add(d.getTime()));
+  const pad = (n) => String(n).padStart(2, "0");
+  const local = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const input = h("input", { type: "datetime-local", class: "input", min: local(now), value: local(at(1, 8)), "aria-label": "Date and time" });
+  const custom = h("form", { class: "pop-custom", onsubmit: (e) => {
+    e.preventDefault();
+    const d = new Date(input.value);
+    if (Number.isNaN(d.getTime()) || d < new Date(Date.now() + 60000)) { input.setCustomValidity("Choose a time in the future"); input.reportValidity(); return; }
+    menu.close(); onPick(d);
+  } }, h("div", { class: "muted small" }, "Pick a date and time"), input, h("button", { class: "btn btn-sm btn-primary" }, kind === "snooze" ? "Snooze" : "Schedule send"));
+  input.addEventListener("input", () => input.setCustomValidity(""));
+  const menu = popMenu(anchor, [h("div", { class: "pop-title" }, kind === "snooze" ? "Snooze until…" : "Send it…"),
+    ...unique.map(([label, d]) => ({ label, hint: whenShort(d.toISOString()), run: () => onPick(d) })), null, custom], { className: "time-menu" });
+}
+
+// ------------------------------------------------------------------------------------------------ scheduled
+// Emails waiting to be sent later (and ones that couldn't be), soonest first.
+let scheduledList = [];
+async function loadScheduled() {
+  $listTitle.replaceChildren(h("h2", {}, "Scheduled"));
+  $list.replaceChildren(h("div", { class: "empty" }, "Loading…"));
+  try { scheduledList = (await api("scheduled")).scheduled; } catch (err) { $list.replaceChildren(h("div", { class: "empty" }, err.message)); return; }
+  state.messages = [];
+  state.scheduledCount = scheduledList.length;
+  renderFolders();
+  if (!scheduledList.length) {
+    $list.replaceChildren(h("div", { class: "empty" }, icon("sendLater"), h("p", {}, "Nothing waiting to be sent. Choose Send later (the clock beside Send) to write an email now and have it go when you choose.")));
+    return;
+  }
+  $list.replaceChildren(...scheduledList.map((x) => h("div", { class: `msg${x.status === "failed" ? " failed" : ""}${state.selected === `s${x.id}` ? " on" : ""}`, role: "listitem", tabindex: "0",
+    onclick: () => showScheduled(x), onkeydown: (e) => { if (e.key === "Enter") showScheduled(x); } },
+  avatar({ address: x.to[0] || "?" }),
+  h("div", { class: "from" }, `To: ${x.to.join(", ") || "(nobody)"}`),
+  h("div", { class: "date snoozed", title: longDate(x.send_at) }, icon("sendLater"), whenShort(x.send_at)),
+  h("div", { class: "line" }, h("span", { class: "subject" }, x.subject || "(no subject)"), h("span", { class: "snippet" }, x.snippet ? `— ${x.snippet}` : ""),
+    h("span", { class: "flags" }, x.attachments > 0 && icon("clip"), x.status === "failed" && h("span", { class: "pill bad" }, "not sent"), x.status === "sending" && h("span", { class: "pill" }, "sending"))))));
+}
+
+/** Open an email that's waiting to be sent from the Scheduled list or a page of its own (#scheduled). */
+function showScheduled(x) {
+  state.selected = `s${x.id}`;
+  current = null;
+  $shell.classList.add("reading");
+  loadScheduledRowsOn();
+  const done = (message) => { toast(message); closeReader(); loadScheduled(); };
+  const act = (fn) => async (e) => { const b = e.currentTarget; b.disabled = true; try { await fn(); } catch (err) { toast(err.message); } b.disabled = false; };
+  const box = state.mailboxes.find((m) => m.id === x.mailbox_id);
+  $reader.replaceChildren(
+    h("div", { class: "reader-bar" }, h("button", { class: "icon-btn back", "aria-label": "Back", onclick: closeReader }, icon("back")), h("span", { class: "spacer" })),
+    h("div", { class: "reader-body" }, h("h1", {}, x.subject || "(no subject)"),
+      x.status === "failed" ? h("div", { class: "notice bad" }, h("strong", {}, "Not sent. "), x.error || "")
+        : h("div", { class: "notice ok scheduled-note" }, icon("sendLater"), ` Sends ${longDate(x.send_at)}`, x.error ? h("div", { class: "small" }, `Trying again: ${x.error}`) : null),
+      h("p", {}, h("span", { class: "muted" }, "From "), box ? box.address : "", h("br"), h("span", { class: "muted" }, "To "), x.to.join(", ")),
+      x.snippet && h("p", { class: "muted" }, x.snippet, x.snippet.length >= 180 ? "…" : ""),
+      x.attachments > 0 && h("p", { class: "muted small" }, icon("clip"), ` ${x.attachments} attachment${x.attachments === 1 ? "" : "s"}`),
+      h("div", { class: "reply-row" },
+        h("button", { class: "btn btn-primary", onclick: act(async () => { await api("scheduled/send", { method: "POST", body: { id: x.id } }); done("Sent."); refreshCounts(); }) }, icon("sent"), "Send now"),
+        h("button", { class: "btn", onclick: (e) => pickTime(e.currentTarget, "send", async (d) => {
+          try { await api("scheduled/time", { method: "POST", body: { id: x.id, send_at: d.toISOString() } }); done(`Sends ${whenShort(d.toISOString())}.`); } catch (err) { toast(err.message); }
+        }) }, icon("clock"), x.status === "failed" ? "Try again at…" : "Change time"),
+        h("button", { class: "btn", onclick: act(async () => {
+          const { payload } = await api("scheduled/cancel", { method: "POST", body: { id: x.id } });
+          closeReader(); loadScheduled(); openPayload(payload);
+        }) }, icon("drafts"), "Edit"),
+        h("button", { class: "btn btn-danger", onclick: act(async () => {
+          if (!confirm("Don't send this email? It's deleted.")) return;
+          await api("scheduled/cancel", { method: "POST", body: { id: x.id } }); done("It won't be sent.");
+        }) }, icon("trash"), "Delete"))));
+}
+function loadScheduledRowsOn() {
+  [...$list.querySelectorAll(".msg")].forEach((row, i) => row.classList.toggle("on", scheduledList[i] && state.selected === `s${scheduledList[i].id}`));
+}
+
+/** Open what a compose window sent (taken back from Undo send or send later) in a compose window again, as it was. */
+function openPayload(payload) {
+  const { attachments = [], ...rest } = payload || {};
+  compose({ local: { key: `new-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, user: state.user.id, updated: Date.now(), dirty: true, payload: rest,
+    attachments: attachments.map((a) => ({ ...a, size: a.size ?? Math.floor((a.content || "").length * 3 / 4) })) } });
 }
 
 // On touch screens, swipe an email right to delete it or left to archive it. Past the line it goes, with Undo; short of
@@ -722,6 +883,8 @@ async function openMessage(id) {
   const bar = h("div", { class: "reader-bar" },
     h("button", { class: "icon-btn back", "aria-label": "Back", onclick: closeReader }, icon("back")),
     m.folder !== "archive" && m.folder !== "sent" && h("button", { class: "icon-btn", title: "Archive (e)", "aria-label": "Archive", onclick: move("archive", "Archived") }, icon("archive")),
+    !["sent", "drafts", "trash", "spam"].includes(m.folder) && h("button", { class: "icon-btn", title: "Snooze (b)", "aria-label": "Snooze", onclick: (e) => snoozeMenu(e.currentTarget) }, icon("clock")),
+    m.folder !== "drafts" && h("button", { class: "icon-btn", title: "Labels (l)", "aria-label": "Labels", onclick: (e) => labelMenu(e.currentTarget, m) }, icon("label")),
     m.folder !== "spam" && m.folder !== "sent" && h("button", { class: "icon-btn", title: "Spam", "aria-label": "Report spam", onclick: move("spam", "Moved to Spam") }, icon("spam")),
     m.folder === "spam" && h("button", { class: "btn btn-sm", onclick: move("inbox", "Moved to Inbox") }, "Not spam"),
     m.folder !== "trash" ? h("button", { class: "icon-btn", title: "Delete (#)", "aria-label": "Delete", onclick: move("trash", "Moved to Trash") }, icon("trash"))
@@ -742,7 +905,21 @@ async function openMessage(id) {
   const shared = state.mailboxes.find((x) => x.id === m.mailbox_id)?.members > 1;
   const teamTop = h("div", { class: "team-top" });
   const teamNotes = h("section", { class: "team-notes", "aria-label": "Team notes" });
-  $reader.replaceChildren(bar, h("div", { class: "reader-body" }, h("h1", {}, m.subject || "(no subject)"), shared && teamTop, mails,
+  // Snooze: the conversation's email in this folder goes until then, and comes back to the top of the Inbox.
+  const snoozeMenu = (anchor) => pickTime(anchor, "snooze", async (d) => {
+    const ids = current.thread.filter((t) => t.folder === m.folder).map((t) => t.id);
+    try { await api("messages/snooze", { method: "POST", body: { ids, until: d.toISOString() } }); } catch (err) { toast(err.message); return; }
+    toast(`Snoozed until ${whenShort(d.toISOString())}`, { label: "Undo", run: async () => { await api("messages/snooze", { method: "POST", body: { ids, until: null } }); refresh(); } });
+    closeReader(); refresh();
+  });
+  const labelChips = (m.labels || []).length ? h("div", { class: "label-chips" }, m.labels.map((l) => h("span", { class: "label-pill big" }, icon("label"), l.name,
+    h("button", { type: "button", title: `Remove ${l.name}`, "aria-label": `Remove the label ${l.name}`, onclick: async () => {
+      try { await api("labels/apply", { method: "POST", body: { ids: [m.id], remove: [l.id] } }); } catch (err) { toast(err.message); return; }
+      refreshCounts(); openMessage(m.id); refresh();
+    } }, "✕")))) : null;
+  const snoozedNote = m.snoozed_until ? h("div", { class: "notice warn row between" }, h("span", {}, icon("clock"), ` Snoozed until ${longDate(m.snoozed_until)}`),
+    h("button", { class: "btn btn-sm", onclick: async () => { await api("messages/snooze", { method: "POST", body: { ids: [m.id], until: null } }); toast("Back in its folder."); openMessage(m.id); refresh(); } }, "Unsnooze")) : null;
+  $reader.replaceChildren(bar, h("div", { class: "reader-body" }, h("h1", {}, m.subject || "(no subject)"), labelChips, snoozedNote, shared && teamTop, mails,
     h("div", { class: "reply-row" },
       h("button", { class: "btn", onclick: () => compose({ mode: "reply", of: last() }) }, icon("reply"), "Reply"),
       h("button", { class: "btn", onclick: () => compose({ mode: "replyAll", of: last() }) }, icon("replyAll"), "Reply all"),
@@ -750,6 +927,41 @@ async function openMessage(id) {
       shared && h("button", { class: "btn", title: "A reply the team writes together, live", onclick: () => compose({ mode: "reply", of: last(), share: true }) }, icon("people"), "Write together")),
     shared && teamNotes));
   if (shared) teamPanel(m, teamTop, teamNotes);
+}
+
+/**
+ * Labels for an email: tick them on or off, move it to one (labelled, and out of the Inbox), or make a new one. Labels
+ * belong to a mailbox, so only the email's own mailbox's are offered.
+ */
+function labelMenu(anchor, m) {
+  const box = state.mailboxes.find((x) => x.id === m.mailbox_id);
+  const labels = box?.labels || [];
+  const has = new Set((m.labels || []).map((l) => l.id));
+  const apply = async (body, message) => {
+    try { await api("labels/apply", { method: "POST", body: { ids: [m.id], ...body } }); } catch (err) { toast(err.message); return; }
+    await refreshCounts();
+    if (message) toast(message);
+    if (body.move) { closeReader(); refresh(); } else { openMessage(m.id); refresh(); }
+  };
+  const name = h("input", { class: "input", placeholder: "New label", maxlength: 50, "aria-label": "New label name" });
+  const make = h("form", { class: "pop-custom", onsubmit: async (e) => {
+    e.preventDefault();
+    if (!name.value.trim()) return;
+    try {
+      const l = await api("labels/save", { method: "POST", body: { mailbox_id: m.mailbox_id, name: name.value } });
+      menu.close();
+      await apply({ add: [l.id] }, `Labelled ${l.name}.`);
+    } catch (err) { toast(err.message); }
+  } }, name, h("button", { class: "btn btn-sm" }, "Add"));
+  const menu = popMenu(anchor, [
+    h("div", { class: "pop-title" }, "Label as"),
+    ...labels.map((l) => h("label", { class: "pop-check" }, h("input", { type: "checkbox", checked: has.has(l.id), onchange: (e) => { menu.close(); apply(e.target.checked ? { add: [l.id] } : { remove: [l.id] }); } }), l.name)),
+    labels.length ? null : h("p", { class: "muted small pop-pad" }, "No labels yet."),
+    make,
+    ...(labels.length && m.folder === "inbox" ? [null, h("div", { class: "pop-title" }, "Move to"),
+      ...labels.map((l) => h("button", { type: "button", role: "menuitem", onclick: () => { menu.close(); apply({ add: [l.id], move: true }, `Moved to ${l.name}.`); } }, icon("label"), h("span", {}, l.name)))] : []),
+    null, h("button", { type: "button", role: "menuitem", onclick: () => { menu.close(); openSettings("rules"); } }, icon("filter"), h("span", {}, "Rules & labels…")),
+  ], { className: "label-menu" });
 }
 
 // ------------------------------------------------------------------------------------------------ shared mailboxes
@@ -910,7 +1122,7 @@ function closeReader() {
 }
 
 async function refreshCounts() {
-  try { state.mailboxes = (await api("session")).mailboxes; renderFolders(); } catch { /* ignore */ }
+  try { const s = await api("session"); state.mailboxes = s.mailboxes; state.scheduledCount = s.scheduled || 0; renderFolders(); } catch { /* ignore */ }
 }
 
 // ------------------------------------------------------------------------------------------------ compose
@@ -1022,7 +1234,11 @@ async function compose(opts = {}) {
       reply_to_id: shared ? shared.reply_to_id : of && opts.mode !== "forward" ? of.id : lp?.reply_to_id, forward_of: of && opts.mode === "forward" ? of.id : lp?.forward_of, attachments: files,
       draft_id: shared ? undefined : draftId || undefined, shared_draft_id: shared?.id, signature: sigOn.checked };
   };
-  const sendBtn = h("button", { class: "btn btn-primary", onclick: async () => {
+  /**
+   * Send it now. Returns whether it went (if not, the compose window is as it was, with the reason shown). $frozen: the
+   * email as it was when Send was pressed (Undo send hides the window, and a hidden editor's text loses its line breaks).
+   */
+  const reallySend = async (frozen = null) => {
     sendBtn.disabled = true;
     status.textContent = "Sending…";
     try {
@@ -1030,7 +1246,7 @@ async function compose(opts = {}) {
       // one the server deletes once it's sent.
       await settle(false);
       if (shared) await team.flush();
-      const r = await api("send", { method: "POST", body: payload() });
+      const r = await api("send", { method: "POST", body: frozen ? { ...frozen, draft_id: shared ? undefined : draftId || undefined } : payload() });
       team.stop();
       finished = gone = true;
       if (flushCompose === flushThis) flushCompose = null;
@@ -1039,14 +1255,141 @@ async function compose(opts = {}) {
       toast(r.suppressed?.length ? `Sent. Not sent to ${r.suppressed.join(", ")}: they bounced or complained before.` : "Sent.");
       refresh();
       if (current) openMessage(current.message.id);
+      return true;
     } catch (err) {
       status.textContent = "";
       toast(err.message);
       sendBtn.disabled = false;
       edited = true;
       saveLocal(); // still unsent: kept on the device, and saved again
+      return false;
     }
+  };
+  /** Placeholders a template left that nothing filled in ({company} with no company known): asked about before it goes. */
+  const okToSend = () => {
+    const left = [...new Set([...`${subjIn.value}\n${editor.innerText}`.matchAll(PLACEHOLDER_RE)].map((x) => x[0]))];
+    return !left.length || confirm(`This email still has ${left.join(", ")} in it. Send it anyway?`);
+  };
+  // Undo send: the window goes, and the email waits a few seconds (Settings → Account) before it's sent, with Undo.
+  // It's kept on this device meanwhile, so closing the page then leaves it in Drafts, unsent (the browser asks first).
+  const holdForUndo = (seconds) => {
+    pendingSend?.now();
+    const frozen = payload();
+    overlay.hidden = true;
+    overlay.classList.remove("compose-overlay"); // a new compose window doesn't close this one meanwhile
+    let left = seconds;
+    const count = h("span", { class: "undo-count" }, `Sending in ${left}s…`);
+    const restore = () => { overlay.hidden = false; overlay.classList.add("compose-overlay"); sendBtn.disabled = false; };
+    const warn = (e) => { e.preventDefault(); e.returnValue = ""; };
+    const finish = () => { clearInterval(tick); clearTimeout(timer); el.remove(); removeEventListener("beforeunload", warn); if (pendingSend === mine) pendingSend = null; };
+    const undo = () => { finish(); restore(); status.textContent = "Not sent: change it and send it again when you're ready."; editor.focus(); };
+    const now = async () => { finish(); if (!(await reallySend(frozen))) restore(); };
+    const mine = { now };
+    const el = h("div", { class: "undo-toast", role: "status" }, count,
+      h("button", { type: "button", onclick: undo }, "Undo"), h("button", { type: "button", class: "quiet", onclick: now }, "Send now"));
+    const tick = setInterval(() => { left -= 1; count.textContent = `Sending in ${Math.max(0, left)}s…`; }, 1000);
+    const timer = setTimeout(now, seconds * 1000);
+    addEventListener("beforeunload", warn);
+    pendingSend = mine;
+    document.body.append(el);
+    el.querySelector("button").focus();
+  };
+  const sendBtn = h("button", { class: "btn btn-primary", onclick: async () => {
+    if (!okToSend()) return;
+    const delay = shared ? 0 : Number(state.prefs?.undo_send ?? 10);
+    if (!delay) { reallySend(); return; }
+    sendBtn.disabled = true;
+    clearTimeout(localTimer); clearTimeout(serverTimer);
+    await saveLocal();
+    holdForUndo(delay);
   } }, "Send");
+  // Send later: kept on the server until then, and listed under Scheduled.
+  const scheduleAt = async (d) => {
+    if (!okToSend()) return;
+    sendBtn.disabled = true;
+    status.textContent = "Scheduling…";
+    try {
+      await settle(false);
+      const r = await api("scheduled", { method: "POST", body: { ...payload(), send_at: d.toISOString() } });
+      finished = gone = true;
+      if (flushCompose === flushThis) flushCompose = null;
+      window.LocalDrafts?.remove(key).catch(() => {});
+      overlay.remove();
+      state.scheduledCount += 1;
+      renderFolders();
+      toast(`Scheduled for ${whenShort(r.send_at)}.`, { label: "Undo", run: async () => {
+        try {
+          const back = await api("scheduled/cancel", { method: "POST", body: { id: r.id } });
+          state.scheduledCount = Math.max(0, state.scheduledCount - 1);
+          renderFolders();
+          openPayload(back.payload);
+        } catch (err) { toast(err.message); }
+      } });
+      refresh();
+    } catch (err) {
+      status.textContent = "";
+      toast(err.message);
+      sendBtn.disabled = false;
+      edited = true;
+      saveLocal();
+    }
+  };
+  const laterBtn = shared ? null : h("button", { class: "icon-btn", type: "button", title: "Send later", "aria-label": "Send later", onclick: () => pickTime(laterBtn, "send", scheduleAt) }, icon("sendLater"));
+
+  // Templates: the Templates button, Ctrl+/ (⌘/ on a Mac) while writing, or typing / and the template's shortcut or name.
+  let lastRange = null;
+  const keepRange = () => { const sel = getSelection(); if (sel.rangeCount && editor.contains(sel.getRangeAt(0).commonAncestorContainer)) lastRange = sel.getRangeAt(0).cloneRange(); };
+  ["keyup", "mouseup", "input", "focus"].forEach((ev) => editor.addEventListener(ev, keepRange));
+  const insertTemplate = async (t, range) => {
+    const values = await placeholderValues({ to: toIn.value, subject: subjIn.value, mailbox: state.mailboxes.find((x) => x.id === fromId), of });
+    if (t.subject && !subjIn.value.trim()) subjIn.value = fillText(t.subject, values);
+    editor.focus();
+    insertAt(editor, range, templateNodes(t.html, values));
+    const left = [...new Set([...`${subjIn.value}\n${editor.innerText}`.matchAll(PLACEHOLDER_RE)].map((x) => x[0]))];
+    if (left.length) toast(`Fill in ${left.join(", ")}: nothing was found for ${left.length === 1 ? "it" : "them"}.`);
+  };
+  const tplBtn = h("button", { class: "icon-btn", type: "button", title: "Templates (type / or press Ctrl+/)", "aria-label": "Templates", onclick: () => templatePicker(tplBtn, lastRange, insertTemplate) }, icon("template"));
+  let slash = null, slashTurn = 0;
+  const closeSlash = () => { slash?.box.remove(); slash = null; };
+  const slashCheck = async () => {
+    const turn = ++slashTurn;
+    const sel = getSelection();
+    const r = sel.rangeCount && sel.isCollapsed ? sel.getRangeAt(0) : null;
+    const node = r?.startContainer;
+    const m = node?.nodeType === 3 && editor.contains(node) ? /(?:^|\s)\/([\p{L}\p{N}_-]{0,32})$/u.exec(node.textContent.slice(0, r.startOffset)) : null;
+    if (!m) { closeSlash(); return; }
+    const term = m[1].toLowerCase();
+    const list = await loadTemplates().catch(() => []);
+    if (turn !== slashTurn) return;
+    closeSlash();
+    const items = list.filter((t) => !term || t.shortcut.startsWith(term) || t.name.toLowerCase().includes(term)).slice(0, 8);
+    if (!items.length) return;
+    const rect = r.getBoundingClientRect();
+    const box = h("div", { class: "suggest slash-menu", role: "listbox", style: `left:${Math.min(rect.left || editor.getBoundingClientRect().left, innerWidth - 300)}px;top:${(rect.bottom || editor.getBoundingClientRect().top + 24) + 4}px` },
+      items.map((t, i) => h("div", { class: i === 0 ? "on" : "", role: "option", onmousedown: (e) => { e.preventDefault(); pickSlash(i); } },
+        h("strong", {}, t.name), t.shortcut ? h("span", { class: "muted" }, ` /${t.shortcut}`) : null, t.shared ? h("span", { class: "pill" }, "shared") : null)));
+    document.body.append(box);
+    slash = { box, items, index: 0, node, start: r.startOffset - m[1].length - 1, end: r.startOffset };
+  };
+  const pickSlash = (i) => {
+    const sl = slash;
+    closeSlash();
+    const range = document.createRange();
+    range.setStart(sl.node, Math.min(sl.start, sl.node.length));
+    range.setEnd(sl.node, Math.min(sl.end, sl.node.length));
+    insertTemplate(sl.items[i], range);
+  };
+  editor.addEventListener("input", slashCheck);
+  editor.addEventListener("blur", () => setTimeout(closeSlash, 150));
+  editor.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "/") { e.preventDefault(); keepRange(); templatePicker(tplBtn, lastRange, insertTemplate); return; }
+    if (!slash) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      slash.index = (slash.index + (e.key === "ArrowDown" ? 1 : slash.items.length - 1)) % slash.items.length;
+      [...slash.box.children].forEach((c, i) => c.classList.toggle("on", i === slash.index));
+    } else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickSlash(slash.index); } else if (e.key === "Escape") { e.stopPropagation(); closeSlash(); }
+  });
 
   // Autosave. Every change is kept on this device straight away (IndexedDB), then saved to Drafts on the server a few
   // seconds after you stop typing. Offline, it stays on the device and is saved when the connection is back (by the
@@ -1152,10 +1495,10 @@ async function compose(opts = {}) {
         h("button", { class: "icon-btn", type: "button", title: "List", "aria-label": "Bulleted list", onclick: cmd("insertUnorderedList") }, icon("list")),
         h("button", { class: "icon-btn", type: "button", title: "Quote", "aria-label": "Quote", onclick: cmd("formatBlock", "blockquote") }, icon("quote")),
         h("button", { class: "icon-btn", type: "button", title: "Link", "aria-label": "Link", onclick: () => { const u = prompt("Link address (https://…)"); if (u && /^https?:\/\//i.test(u)) cmd("createLink", u)(); } }, icon("link")),
-        h("button", { class: "icon-btn", type: "button", title: "Attach files", "aria-label": "Attach files", onclick: () => fileIn.click() }, icon("clip")), fileIn),
+        h("button", { class: "icon-btn", type: "button", title: "Attach files", "aria-label": "Attach files", onclick: () => fileIn.click() }, icon("clip")), fileIn, tplBtn),
       editor, sigBox, attList,
       shared && h("p", { class: "muted small shared-note" }, "Everyone writing this sees each change as it's made. Attachments you add are only on your screen until you send."),
-      h("div", { class: "compose-foot" }, sendBtn, !shared && h("button", { class: "btn", onclick: saveDraft }, "Save draft"), status, h("span", { class: "spacer" }),
+      h("div", { class: "compose-foot" }, h("div", { class: "send-group" }, sendBtn, laterBtn), !shared && h("button", { class: "btn", onclick: saveDraft }, "Save draft"), status, h("span", { class: "spacer" }),
         h("button", { class: "icon-btn", title: shared ? "Delete the shared reply" : "Discard draft", "aria-label": "Discard draft", onclick: discard }, icon("trash")))));
   document.body.append(overlay);
   if (local?.dirty) status.textContent = "Recovered from this device.";
@@ -1163,6 +1506,114 @@ async function compose(opts = {}) {
   suggest(toIn, contacts); suggest(ccIn, contacts); suggest(bccIn, contacts);
   (to.length ? editor : toIn).focus();
   if (to.length) { const r = document.createRange(); r.setStart(editor, 0); r.collapse(true); getSelection().removeAllRanges(); getSelection().addRange(r); }
+}
+
+/** The email that's waiting for its Undo send seconds to pass (sending another one sends it straight away). */
+let pendingSend = null;
+
+// ------------------------------------------------------------------------------------------------ templates
+const PLACEHOLDER_RE = /\{(first_name|last_name|name|email|company|ticket_id|subject|my_name|my_first_name|my_email|date)\}/g;
+let templatesCache = null;
+/** Your templates, then the shared ones: [{ id, name, shortcut, subject, html, shared }]. */
+function loadTemplates(fresh = false) {
+  if (fresh || !templatesCache) {
+    templatesCache = api("templates").then((r) => [...r.personal.map((t) => ({ ...t, shared: false })), ...r.shared.map((t) => ({ ...t, shared: true }))])
+      .catch((err) => { templatesCache = null; throw err; });
+  }
+  return templatesCache;
+}
+
+/** A conversation's reference for {ticket_id}: the same for everyone replying to it (from its thread), six letters and digits. */
+function ticketId(key) {
+  let n = 0x811c9dc5;
+  for (const ch of String(key)) { n ^= ch.codePointAt(0); n = Math.imul(n, 0x01000193) >>> 0; }
+  return n.toString(36).toUpperCase().padStart(6, "0").slice(-6);
+}
+
+/** What the placeholders stand for in this email: the first recipient (and your contacts' name and company for them), you, and the conversation. */
+async function placeholderValues({ to, subject, mailbox, of }) {
+  const first = (to || "").split(/[,;]/).map((x) => x.trim()).filter(Boolean)[0] || "";
+  const address = (/<([^>]+)>/.exec(first)?.[1] || first).trim().toLowerCase();
+  const people = await (contacts ??= api("contacts").then((r) => r.contacts).catch(() => []));
+  const c = people.find((x) => x.email === address);
+  const name = (c?.name || (of?.from?.address?.toLowerCase() === address ? of.from.name : "") || /^"?([^"<]*?)"?\s*</.exec(first)?.[1] || "").trim();
+  const parts = name.split(/\s+/).filter(Boolean);
+  const me = mailbox?.display_name || state.user.name || "";
+  const values = { email: address, name, first_name: parts[0] || "", last_name: parts.length > 1 ? parts[parts.length - 1] : "", company: c?.company || "",
+    ticket_id: of ? ticketId(of.thread_key || `m${of.id}`) : "", subject: subject || "", my_name: me, my_first_name: me.split(/\s+/)[0] || "",
+    my_email: mailbox?.address || "", date: new Date().toLocaleDateString([], { dateStyle: "long" }) };
+  return Object.fromEntries(Object.entries(values).filter(([, v]) => v));
+}
+const fillText = (text, values) => text.replace(PLACEHOLDER_RE, (m, k) => values[k] ?? m);
+
+/**
+ * A template's text as nodes for the editor: simple formatting only (the server keeps only that too), links only to
+ * web and mail addresses, and the placeholders that are known filled in (as text, never as HTML).
+ */
+function templateNodes(html, values) {
+  const t = document.createElement("template"); // inert: nothing in it runs or loads
+  t.innerHTML = html;
+  const keep = new Set(["P", "DIV", "BR", "B", "STRONG", "I", "EM", "U", "S", "UL", "OL", "LI", "BLOCKQUOTE", "A", "SPAN", "H1", "H2", "H3", "HR"]);
+  const clean = (node) => {
+    for (const ch of [...node.childNodes]) {
+      if (ch.nodeType === 3) { ch.textContent = fillText(ch.textContent, values); continue; }
+      if (ch.nodeType !== 1) { ch.remove(); continue; }
+      if (!keep.has(ch.tagName)) {
+        if (["SCRIPT", "STYLE", "TEMPLATE", "IFRAME", "OBJECT", "EMBED", "SVG", "MATH", "IMG"].includes(ch.tagName.toUpperCase())) { ch.remove(); continue; }
+        clean(ch);
+        ch.replaceWith(...ch.childNodes);
+        continue;
+      }
+      const href = ch.tagName === "A" ? ch.getAttribute("href") : null;
+      for (const a of [...ch.attributes]) ch.removeAttribute(a.name);
+      if (href && /^(https?:|mailto:)/i.test(href.trim())) ch.setAttribute("href", href.trim());
+      clean(ch);
+    }
+  };
+  clean(t.content);
+  return t.content;
+}
+
+/** Put nodes into the editor where the caret was (or at the end), and the caret after them. */
+function insertAt(editor, range, frag) {
+  if (!range || !editor.contains(range.commonAncestorContainer)) {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  const last = frag.lastChild;
+  range.insertNode(frag);
+  if (last) {
+    const after = document.createRange();
+    after.setStartAfter(last);
+    after.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(after);
+  }
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** The Templates menu in a compose window: search by name or shortcut, pick one to put it in. */
+async function templatePicker(anchor, range, insert) {
+  const where = range?.cloneRange();
+  let list;
+  try { list = await loadTemplates(); } catch (err) { toast(err.message); return; }
+  if (!list.length) {
+    popMenu(anchor, [h("p", { class: "muted small pop-pad" }, "No templates yet: replies you write often, with placeholders like {first_name}."),
+      { label: "Make one", icon: "template", run: () => openSettings("templates") }], { className: "template-menu" });
+    return;
+  }
+  const search = h("input", { class: "input", placeholder: "Search templates", "aria-label": "Search templates", autocomplete: "off" });
+  const box = h("div", { class: "pop-list" });
+  const shown = () => { const q = search.value.trim().toLowerCase().replace(/^\//, ""); return list.filter((t) => !q || t.name.toLowerCase().includes(q) || t.shortcut.startsWith(q)); };
+  const render = () => box.replaceChildren(...shown().map((t) => h("button", { type: "button", role: "menuitem", onclick: () => { menu.close(); insert(t, where); } },
+    icon("template"), h("span", {}, t.name), h("small", { class: "muted" }, [t.shortcut && `/${t.shortcut}`, t.shared && "shared"].filter(Boolean).join(" · ")))));
+  search.addEventListener("input", render);
+  search.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); box.querySelector("button")?.click(); } });
+  const menu = popMenu(anchor, [search, box, null, { label: "Manage templates…", icon: "settings", run: () => openSettings("templates") }], { className: "template-menu" });
+  render();
+  search.focus();
 }
 
 async function openDraft(m) {
@@ -1437,7 +1888,7 @@ function suggest(input, contactsPromise) {
 async function openSettings(tab = "account") {
   document.querySelector(".overlay.settings-overlay")?.remove();
   const body = h("div", { class: "tab-body" });
-  const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["import", "Import email"], ["security", "Sign-in & alerts"],
+  const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["templates", "Templates"], ["rules", "Rules & labels"], ["import", "Import email"], ["security", "Sign-in & alerts"],
     ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-mailboxes", "Connect addresses"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
@@ -1743,6 +2194,183 @@ async function signatureSettings(m) {
   return box;
 }
 
+/** A small editor for formatted text (bold, italic, underline, lists, links), for templates. */
+function richEditor(html, label) {
+  const ed = h("div", { class: "editor small-editor", contenteditable: "true", role: "textbox", "aria-multiline": "true", "aria-label": label });
+  ed.append(templateNodes(html || "", {}));
+  const cmd = (name, value) => () => { ed.focus(); document.execCommand(name, false, value); };
+  const bar = h("div", { class: "toolbar", role: "toolbar", "aria-label": "Formatting" },
+    h("button", { class: "icon-btn", type: "button", title: "Bold", "aria-label": "Bold", onclick: cmd("bold") }, icon("bold")),
+    h("button", { class: "icon-btn", type: "button", title: "Italic", "aria-label": "Italic", onclick: cmd("italic") }, icon("italic")),
+    h("button", { class: "icon-btn", type: "button", title: "Underline", "aria-label": "Underline", onclick: cmd("underline") }, icon("underline")),
+    h("button", { class: "icon-btn", type: "button", title: "List", "aria-label": "Bulleted list", onclick: cmd("insertUnorderedList") }, icon("list")),
+    h("button", { class: "icon-btn", type: "button", title: "Link", "aria-label": "Link", onclick: () => { const u = prompt("Link address (https://…)"); if (u && /^(https?:\/\/|mailto:)/i.test(u)) cmd("createLink", u)(); } }, icon("link")));
+  return { ed, bar };
+}
+
+/** Settings → Templates: your own, and the shared ones (administrators change those). */
+async function templateSettings() {
+  const r = await api("templates");
+  templatesCache = Promise.resolve([...r.personal.map((t) => ({ ...t, shared: false })), ...r.shared.map((t) => ({ ...t, shared: true }))]);
+  const area = h("div");
+  const reload = () => openSettings("templates");
+  const edit = (book, t = null) => {
+    const { ed, bar } = richEditor(t?.html || "", "Template text");
+    const chips = h("div", { class: "chips" }, h("span", { class: "muted small" }, "Insert:"), Object.entries(r.placeholders).map(([k, about]) => h("button", { type: "button", class: "chip", title: about, onmousedown: (e) => e.preventDefault(), onclick: () => {
+      if (!ed.contains(getSelection().anchorNode)) { ed.focus(); const rr = document.createRange(); rr.selectNodeContents(ed); rr.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(rr); }
+      document.execCommand("insertText", false, `{${k}}`);
+    } }, `{${k}}`)));
+    const form = formFor([
+      h("div", { class: "row" }, h("label", { class: "field grow" }, "Name", h("input", { name: "name", required: true, maxlength: 80, value: t?.name || "", placeholder: "Refund processed" })),
+        h("label", { class: "field short-field" }, "Shortcut", h("input", { name: "shortcut", maxlength: 32, value: t?.shortcut || "", placeholder: "refund", autocapitalize: "none", spellcheck: "false" }))),
+      h("label", { class: "field" }, "Subject (optional: used when the email has none yet)", h("input", { name: "subject", maxlength: 200, value: t?.subject || "" })),
+      h("div", { class: "field" }, "Text", bar, ed, chips,
+        h("small", {}, "Placeholders are filled in from the email you're writing: the first recipient (and their name and company from your contacts), you, and the conversation. One that can't be filled in stays as it is, and you're asked before sending it.")),
+    ], t ? "Save" : "Add template", async (v) => {
+      await api("templates/save", { method: "POST", body: { ...v, html: ed.innerHTML, book, id: t?.id } });
+      templatesCache = null;
+      toast("Saved.");
+      reload();
+    });
+    area.replaceChildren(h("section", {}, h("h3", {}, t ? `Edit ${t.name}` : book === "shared" ? "New shared template" : "New template"), form,
+      h("button", { type: "button", class: "btn btn-sm", onclick: () => area.replaceChildren() }, "Cancel")));
+    area.scrollIntoView({ behavior: "smooth" });
+  };
+  const listOf = (items, book, canEdit) => items.length ? h("table", { class: "list" }, items.map((t) => h("tr", {},
+    h("td", {}, h("strong", {}, t.name), t.shortcut ? h("span", { class: "muted" }, ` /${t.shortcut}`) : null,
+      h("div", { class: "muted small clamp" }, templateNodes(t.html, {}).textContent.slice(0, 140))),
+    h("td", { class: "actions" }, canEdit && h("button", { class: "btn btn-sm", onclick: () => edit(book, t) }, "Edit"),
+      canEdit && h("button", { class: "btn btn-sm btn-danger", onclick: async () => {
+        if (!confirm(`Delete the template ${t.name}?`)) return;
+        try { await api("templates/delete", { method: "POST", body: { id: t.id, book } }); templatesCache = null; reload(); } catch (err) { toast(err.message); }
+      } }, "Delete")))))
+    : h("p", { class: "muted" }, book === "shared" ? "No shared templates." : "None yet.");
+  return h("div", {},
+    h("p", { class: "muted" }, "Replies you write often, ready to put in an email: type / and the shortcut (or name) while writing, press Ctrl+/ (⌘/ on a Mac), or use the Templates button."),
+    h("section", {}, h("div", { class: "row between" }, h("h3", {}, "Your templates"), h("button", { class: "btn btn-sm", onclick: () => edit("personal") }, "New template")),
+      listOf(r.personal, "personal", true)),
+    h("section", {}, h("div", { class: "row between" }, h("h3", {}, "Shared templates"), r.can_edit_shared && h("button", { class: "btn btn-sm", onclick: () => edit("shared") }, "New shared template")),
+      h("p", { class: "muted small" }, r.can_edit_shared ? "Everyone can use these. Only administrators change them." : "Your administrator's, for everyone."),
+      listOf(r.shared, "shared", r.can_edit_shared)),
+    area);
+}
+
+/** Settings → Rules & labels: a mailbox's labels, and the rules that file its new email. */
+let rulesMailbox = 0;
+async function rulesSettings() {
+  if (!state.mailboxes.length) return h("p", { class: "muted" }, "You don't have a mailbox yet.");
+  if (!state.mailboxes.some((m) => m.id === rulesMailbox)) rulesMailbox = state.mailbox || state.mailboxes[0].id;
+  const mb = state.mailboxes.find((m) => m.id === rulesMailbox);
+  const r = await api("rules", { query: { mailbox: String(rulesMailbox) } });
+  const reload = async () => { await refreshCounts(); openSettings("rules"); };
+  const labelName = (id) => r.labels.find((l) => l.id === Number(id))?.name || "(a label that's gone)";
+  const area = h("div");
+  const pick = state.mailboxes.length > 1 ? h("label", { class: "field" }, "Mailbox", h("select", { onchange: (e) => { rulesMailbox = Number(e.target.value); openSettings("rules"); } },
+    state.mailboxes.map((m) => h("option", { value: String(m.id), selected: m.id === rulesMailbox }, m.address)))) : null;
+
+  // Labels: add, rename, delete.
+  const labelRows = r.labels.length ? h("div", { class: "chips" }, r.labels.map((l) => h("span", { class: "label-pill big" }, icon("label"), l.name,
+    h("button", { type: "button", title: "Rename", "aria-label": `Rename ${l.name}`, onclick: async () => {
+      const name = prompt("New name for the label", l.name);
+      if (!name || name === l.name) return;
+      try { await api("labels/save", { method: "POST", body: { id: l.id, name } }); reload(); } catch (err) { toast(err.message); }
+    } }, "✎"),
+    h("button", { type: "button", title: "Delete", "aria-label": `Delete ${l.name}`, onclick: async () => {
+      if (!confirm(`Delete the label ${l.name}? Its email stays where it is, without the label.`)) return;
+      try { await api("labels/delete", { method: "POST", body: { id: l.id } }); reload(); } catch (err) { toast(err.message); }
+    } }, "✕"))))
+    : h("p", { class: "muted" }, "No labels yet.");
+  const addLabel = formFor([h("label", { class: "field grow" }, "New label", h("input", { name: "name", required: true, maxlength: 50, placeholder: "Accounting" }))], "Add label", async (v) => {
+    await api("labels/save", { method: "POST", body: { mailbox_id: rulesMailbox, name: v.name } });
+    reload();
+  });
+  addLabel.classList.add("row");
+
+  const describe = (rule) => {
+    const conds = rule.conditions.map((c) => `${(r.fields[c.field] || c.field).toLowerCase()} ${r.ops[c.op] || c.op} “${c.value}”`).join(rule.match === "any" ? " or " : " and ");
+    const a = rule.actions;
+    const does = [a.move === "label" ? `move to ${labelName(a.move_label)}` : a.move ? `move to ${a.move[0].toUpperCase()}${a.move.slice(1)}` : null,
+      a.tags?.length ? `label ${a.tags.map(labelName).join(", ")}` : null, a.read ? "mark read" : null, a.star ? "star" : null].filter(Boolean).join(", ");
+    return `If ${conds}: ${does}.`;
+  };
+  const move = async (i, by) => {
+    const ids = r.rules.map((x) => x.id);
+    [ids[i], ids[i + by]] = [ids[i + by], ids[i]];
+    try { await api("rules/order", { method: "POST", body: { mailbox_id: rulesMailbox, ids } }); reload(); } catch (err) { toast(err.message); }
+  };
+  const ruleRows = r.rules.length ? h("table", { class: "list rules" }, r.rules.map((rule, i) => h("tr", { class: rule.enabled ? "" : "off" },
+    h("td", {}, h("label", { class: "check", title: rule.enabled ? "On" : "Off" }, h("input", { type: "checkbox", checked: rule.enabled, "aria-label": "On", onchange: async (e) => {
+      try { await api("rules/enable", { method: "POST", body: { id: rule.id, enabled: e.target.checked } }); reload(); } catch (err) { toast(err.message); }
+    } }))),
+    h("td", {}, rule.name ? h("strong", {}, rule.name) : null, h("div", { class: rule.name ? "muted small" : "" }, describe(rule))),
+    h("td", { class: "actions" },
+      h("button", { class: "icon-btn", type: "button", title: "Earlier", "aria-label": "Move up", disabled: i === 0, onclick: () => move(i, -1) }, icon("up")),
+      h("button", { class: "icon-btn", type: "button", title: "Later", "aria-label": "Move down", disabled: i === r.rules.length - 1, onclick: () => move(i, 1) }, icon("down")),
+      h("button", { class: "btn btn-sm", onclick: () => edit(rule) }, "Edit"),
+      h("button", { class: "btn btn-sm", title: "Run it on the email in the Inbox now", onclick: async (e) => {
+        e.target.disabled = true;
+        try { const x = await api("rules/run", { method: "POST", body: { id: rule.id } }); toast(x.applied ? `Done: it matched ${x.applied} email${x.applied === 1 ? "" : "s"} in the Inbox.` : "Nothing in the Inbox matches it."); refreshCounts(); refresh(); }
+        catch (err) { toast(err.message); }
+        e.target.disabled = false;
+      } }, "Run now"),
+      h("button", { class: "btn btn-sm btn-danger", onclick: async () => {
+        if (!confirm("Delete this rule?")) return;
+        try { await api("rules/delete", { method: "POST", body: { id: rule.id } }); reload(); } catch (err) { toast(err.message); }
+      } }, "Delete")))))
+    : h("p", { class: "muted" }, "No rules yet.");
+
+  const edit = (rule = null) => {
+    const conds = h("div", { class: "conditions" });
+    const condRow = (c = { field: "from", op: "contains", value: "" }) => {
+      const row = h("div", { class: "row condition" },
+        h("select", { class: "input", "aria-label": "What it looks at", dataset: { k: "field" } }, Object.entries(r.fields).map(([k, l]) => h("option", { value: k, selected: c.field === k }, l))),
+        h("select", { class: "input", "aria-label": "How", dataset: { k: "op" } }, Object.entries(r.ops).map(([k, l]) => h("option", { value: k, selected: c.op === k }, l))),
+        h("input", { class: "input grow", "aria-label": "Text", value: c.value, maxlength: 200, placeholder: "@example.com", dataset: { k: "value" } }),
+        h("button", { type: "button", class: "icon-btn", "aria-label": "Remove this condition", onclick: () => { if (conds.children.length > 1) row.remove(); } }, icon("close")));
+      conds.append(row);
+    };
+    (rule?.conditions.length ? rule.conditions : [undefined]).forEach((c) => condRow(c));
+    const a = rule?.actions || { move: "", tags: [] };
+    const moveSel = h("select", { name: "move", class: "input" },
+      [["", "Leave it in the Inbox"], ["archive", "Archive"], ["spam", "Spam"], ["trash", "Trash"]].map(([v, l]) => h("option", { value: v, selected: a.move === v }, l)),
+      r.labels.length ? h("optgroup", { label: "A label (like a folder)" }, r.labels.map((l) => h("option", { value: `label:${l.id}`, selected: a.move === "label" && a.move_label === l.id }, l.name))) : null);
+    const form = formFor([
+      h("label", { class: "field" }, "Name (optional)", h("input", { name: "name", maxlength: 80, value: rule?.name || "", placeholder: "Invoices" })),
+      h("div", { class: "field" }, h("span", {}, "If ", h("select", { name: "match", class: "inline-select" }, h("option", { value: "all", selected: rule?.match !== "any" }, "all"),
+        h("option", { value: "any", selected: rule?.match === "any" }, "any")), " of these match"), conds,
+      h("div", {}, h("button", { type: "button", class: "btn btn-sm", onclick: () => condRow() }, "Add a condition"))),
+      h("label", { class: "field" }, "Move it to", moveSel),
+      h("div", { class: "field" }, "Label it", r.labels.length ? h("div", { class: "chips" }, r.labels.map((l) => h("label", { class: "check chip-check" },
+        h("input", { type: "checkbox", name: `tag_${l.id}`, checked: (a.tags || []).includes(l.id) }), l.name)))
+        : h("small", {}, "Add labels above to use them here.")),
+      h("label", { class: "check" }, h("input", { type: "checkbox", name: "read", checked: !!a.read }), "Mark it read"),
+      h("label", { class: "check" }, h("input", { type: "checkbox", name: "star", checked: !!a.star }), "Star it"),
+      h("label", { class: "check" }, h("input", { type: "checkbox", name: "apply_now", checked: !rule }), "Also apply it to the email in the Inbox now"),
+    ], rule ? "Save rule" : "Add rule", async (v) => {
+      const conditions = [...conds.children].map((row) => Object.fromEntries([...row.querySelectorAll("[data-k]")].map((el) => [el.dataset.k, el.value])));
+      const mv = String(v.move || "");
+      const body = { mailbox_id: rulesMailbox, id: rule?.id, name: v.name, match: v.match, conditions, apply_now: v.apply_now === "on", enabled: rule ? rule.enabled : true,
+        actions: { move: mv.startsWith("label:") ? "label" : mv, move_label: mv.startsWith("label:") ? Number(mv.slice(6)) : undefined,
+          tags: r.labels.filter((l) => v[`tag_${l.id}`] === "on").map((l) => l.id), read: v.read === "on", star: v.star === "on" } };
+      const saved = await api("rules/save", { method: "POST", body });
+      toast(saved.applied ? `Saved, and it filed ${saved.applied} email${saved.applied === 1 ? "" : "s"} from the Inbox.` : "Saved.");
+      refresh();
+      reload();
+    });
+    area.replaceChildren(h("section", {}, h("h3", {}, rule ? "Edit rule" : "New rule"), form, h("button", { type: "button", class: "btn btn-sm", onclick: () => area.replaceChildren() }, "Cancel")));
+    area.scrollIntoView({ behavior: "smooth" });
+  };
+
+  return h("div", {}, pick,
+    h("section", {}, h("h3", {}, "Labels"),
+      h("p", { class: "muted" }, "Your own folders and tags for ", mb.address, mb.members > 1 ? " (everyone on this shared mailbox has the same ones)" : "", ". Moving an email to a label takes it out of the Inbox; labelling it leaves it where it is."),
+      labelRows, addLabel),
+    h("section", {}, h("div", { class: "row between" }, h("h3", {}, "Rules"), h("button", { class: "btn btn-sm", onclick: () => edit() }, "New rule")),
+      h("p", { class: "muted" }, "They run in this order on new email as it arrives in the Inbox", mb.members > 1 ? ", for everyone on the mailbox" : "", ". Every rule that matches labels it; the first one that moves it decides where it goes."),
+      ruleRows),
+    area);
+}
+
 /** Settings: the authenticator app and recovery codes. Two-step verification can't be turned off. */
 async function twoStepSettings() {
   const st = await api("mfa/status");
@@ -1783,8 +2411,16 @@ const SETTINGS = {
       h("section", {}, h("h3", {}, "Change your password"),
         formFor([h("label", { class: "field" }, "Current password", h("input", { type: "password", name: "current", required: true, autocomplete: "current-password" })),
           h("label", { class: "field" }, "New password (10+ characters)", h("input", { type: "password", name: "new", minlength: 10, required: true, autocomplete: "new-password" }))],
-        "Change password", async (v) => { await api("password", { method: "POST", body: v }); toast("Password changed."); })));
+        "Change password", async (v) => { await api("password", { method: "POST", body: v }); toast("Password changed."); })),
+      h("section", {}, h("h3", {}, "Undo send"),
+        h("p", { class: "muted" }, "After you press Send, the email waits this long before it goes, with Undo to take it back and change it. It's on every device you sign in on."),
+        h("label", { class: "field short-field" }, "Wait before sending", h("select", { onchange: async (e) => {
+          try { state.prefs = await api("prefs", { method: "POST", body: { undo_send: Number(e.target.value) } }); toast(state.prefs.undo_send ? `Emails wait ${state.prefs.undo_send} seconds before they go.` : "Emails go straight away."); }
+          catch (err) { toast(err.message); }
+        } }, [0, 5, 10, 20, 30].map((n) => h("option", { value: String(n), selected: Number(state.prefs?.undo_send ?? 10) === n }, n ? `${n} seconds` : "Don't wait (no Undo)"))))));
   },
+  templates: () => templateSettings(),
+  rules: () => rulesSettings(),
   async mailboxes() {
     if (!state.mailboxes.length) return h("p", { class: "muted" }, "You don't have a mailbox yet.");
     return h("div", {}, h("p", { class: "muted" }, "Signatures are kept on GhostParse, so they're added to this address's email wherever it's sent from: here, your website or your shop."),
@@ -1868,7 +2504,7 @@ const SETTINGS = {
 // Escape closes the menu on a phone, as tapping outside it does.
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $shell?.classList.contains("menu")) $shell.classList.remove("menu"); });
 document.addEventListener("keydown", (e) => {
-  if (!$shell || e.target.closest("input, textarea, select, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey || document.querySelector(".overlay")) return;
+  if (!$shell || e.target.closest("input, textarea, select, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey || document.querySelector(".overlay:not([hidden]), .pop-menu")) return;
   if (state.folder === "contacts" && !["c", "/"].includes(e.key)) return; // mail shortcuts don't apply to contacts
   const idx = state.messages.findIndex((m) => m.id === state.selected);
   if (e.key === "c") { e.preventDefault(); compose(); }
@@ -1878,13 +2514,15 @@ document.addEventListener("keydown", (e) => {
   else if (current && e.key === "r") compose({ mode: "reply", of: last() });
   else if (current && e.key === "f") compose({ mode: "forward", of: last() });
   else if (current && e.key === "e") $reader.querySelector('[aria-label="Archive"]')?.click();
+  else if (current && e.key === "b") $reader.querySelector('[aria-label="Snooze"]')?.click();
+  else if (current && e.key === "l") $reader.querySelector('[aria-label="Labels"]')?.click();
   else if (current && e.key === "#") $reader.querySelector('[aria-label="Delete"]')?.click();
   else if (e.key === "Escape" && current) closeReader();
 });
 
 // New mail: check every 30 seconds while the page is open and visible.
-setInterval(() => { if ($shell && document.visibilityState === "visible" && !document.querySelector(".overlay")) refresh(); }, 30000);
+setInterval(() => { if ($shell && document.visibilityState === "visible" && !document.querySelector(".overlay:not([hidden])")) refresh(); }, 30000);
 document.addEventListener("visibilitychange", () => { if ($shell && document.visibilityState === "visible") refresh(); });
 
-window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh };
+window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder };
 start();

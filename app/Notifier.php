@@ -88,7 +88,9 @@ final class Notifier
         $from = $data['from'] ?? [];
         $sender = is_array($from) ? (($from['name'] ?? '') ?: ($from['address'] ?? 'Someone')) : (string) $from;
         foreach ($stored as $s) {
-            if ($db->value('SELECT folder FROM {messages} WHERE id = ?', [$s['id']]) !== 'inbox') {
+            // Filed away or marked read by one of the mailbox's rules: nothing to announce.
+            $row = $db->one('SELECT folder, is_read FROM {messages} WHERE id = ?', [$s['id']]);
+            if (!$row || $row['folder'] !== 'inbox' || $row['is_read']) {
                 continue;
             }
             $payload = ['title' => mb_substr($sender, 0, 80), 'body' => mb_substr((string) (($data['subject'] ?? '') ?: '(no subject)'), 0, 140),
@@ -104,7 +106,7 @@ final class Notifier
     public function unreadFor(int $userId): int
     {
         return (int) $this->app->db->value(
-            "SELECT COUNT(*) FROM {messages} m JOIN {user_mailboxes} um ON um.mailbox_id = m.mailbox_id WHERE um.user_id = ? AND m.folder = 'inbox' AND m.is_read = 0",
+            "SELECT COUNT(*) FROM {messages} m JOIN {user_mailboxes} um ON um.mailbox_id = m.mailbox_id WHERE um.user_id = ? AND m.folder = 'inbox' AND m.is_read = 0 AND m.snoozed_until IS NULL",
             [$userId],
         );
     }

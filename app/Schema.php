@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -251,6 +251,74 @@ final class Schema
                     PRIMARY KEY (draft_id, user_id),
                     FOREIGN KEY (draft_id) REFERENCES {shared_drafts}(id) ON DELETE CASCADE,
                     FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Templates (canned responses), send later and snooze, and rules that file new email into labels.
+            // owner_id 0 is the shared set of templates (administrators edit it). A scheduled email is the compose
+            // window's payload, sent by Due when its time comes. sort_at is where a message sits in its list: its date,
+            // or when it came back from being snoozed. A label is a mailbox's own folder (or tag).
+            8 => [
+                "CREATE TABLE IF NOT EXISTS {templates} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    owner_id INT UNSIGNED NOT NULL,
+                    name_enc TEXT NOT NULL,
+                    shortcut_enc TEXT NULL,
+                    subject_enc TEXT NULL,
+                    body_enc MEDIUMTEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    KEY owner (owner_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {scheduled} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT UNSIGNED NOT NULL,
+                    mailbox_id INT UNSIGNED NOT NULL,
+                    send_at DATETIME NOT NULL,
+                    payload_enc LONGTEXT NOT NULL,
+                    summary_enc TEXT NOT NULL,
+                    status ENUM('waiting','sending','failed') NOT NULL DEFAULT 'waiting',
+                    attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                    error_enc TEXT NULL,
+                    claimed_at DATETIME NULL,
+                    created_at DATETIME NOT NULL,
+                    KEY due (status, send_at),
+                    KEY user_scheduled (user_id, send_at),
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "ALTER TABLE {messages} ADD COLUMN snoozed_until DATETIME NULL, ADD COLUMN sort_at DATETIME NULL,
+                    ADD KEY snoozed (snoozed_until), ADD KEY mailbox_folder_sort (mailbox_id, folder, sort_at)",
+                "UPDATE {messages} SET sort_at = sent_at WHERE sort_at IS NULL",
+                "ALTER TABLE {users} ADD COLUMN prefs TEXT NULL",
+                "CREATE TABLE IF NOT EXISTS {labels} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    mailbox_id INT UNSIGNED NOT NULL,
+                    name_bidx BINARY(16) NOT NULL,
+                    name_enc TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    UNIQUE KEY mailbox_name (mailbox_id, name_bidx),
+                    FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {message_labels} (
+                    message_id INT UNSIGNED NOT NULL,
+                    label_id INT UNSIGNED NOT NULL,
+                    PRIMARY KEY (message_id, label_id),
+                    KEY label (label_id),
+                    FOREIGN KEY (message_id) REFERENCES {messages}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (label_id) REFERENCES {labels}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {rules} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    mailbox_id INT UNSIGNED NOT NULL,
+                    position INT UNSIGNED NOT NULL DEFAULT 0,
+                    enabled TINYINT(1) NOT NULL DEFAULT 1,
+                    rule_enc TEXT NOT NULL,
+                    created_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    KEY mailbox_rules (mailbox_id, position),
+                    FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (created_by) REFERENCES {users}(id) ON DELETE SET NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

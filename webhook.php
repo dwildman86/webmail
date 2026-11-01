@@ -41,3 +41,7 @@ try {
 }
 http_response_code($status);
 echo json_encode($out);
+// Email arriving is a chance to send scheduled email and bring back snoozed email, after GhostParse has its answer.
+if (isset($app) && $status === 200) {
+    \Webmail\Due::afterResponse($app);
+}

@@ -4,7 +4,8 @@ A modern webmail you host yourself. It reads and sends email for your GhostParse
 encrypted in your own MySQL database, and installs to phones and computers like an app, with passkey sign-in
 (Face ID, Touch ID, Windows Hello, fingerprint) and new-mail notifications.
 
-It runs on ordinary shared hosting: plain PHP and MySQL, no Composer, no command line, no cron jobs.
+It runs on ordinary shared hosting: plain PHP and MySQL, no Composer, no command line, no cron jobs (one is optional, for
+scheduled email on the minute: see [Send later and snooze](#send-later-and-snooze)).
 
 ## What you need
 
@@ -94,9 +95,14 @@ marks.
 ## Using it
 
 - **Mailboxes and users**: under **Settings → Connect addresses**, an administrator turns more GhostParse addresses into mailboxes. Under **Settings → Users**, they add people and choose which mailboxes each person can read and send from. A shared mailbox, such as support@, can belong to several people.
-- **Folders**: Inbox, Starred, Sent, Drafts, Archive, Spam and Trash. Conversations are grouped into threads. Email that GhostParse's spam check flags goes to Spam.
+- **Folders**: Inbox, Starred, Snoozed, Sent, Drafts, Scheduled, Archive, Spam and Trash, and your own labels. Conversations are grouped into threads. Email that GhostParse's spam check flags goes to Spam.
+- **Labels and rules**: under **Settings → Rules & labels**, each mailbox has its own labels (folders or tags, such as *Accounting* or *Billing*) and rules that file new email as it arrives. A rule looks at the sender, recipients, subject or text (contains, doesn't contain, is, starts with, ends with), all or any of its conditions, and then moves the email (to Archive, Spam, Trash or a label), labels it, marks it read or stars it. For example: *if the sender ends with @example.com or the subject contains Invoice, move it to Accounting and label it Billing*. Rules run in order; every rule that matches labels the email, and the first one that moves it decides where it goes. Run a rule on what's in the Inbox already with **Run now**, or when you save it. Moving an email to a label takes it out of the Inbox; labelling it leaves it there. Label an email by hand with the label button on it (`l`). In a shared mailbox, everyone shares its labels and rules.
+- **Snooze**: the clock on an email (`b`) hides its conversation until later today, tomorrow, the weekend, next week or a time you choose. Then it's back at the top of the Inbox, unread, with a notification. **Snoozed** lists what's waiting.
 - **Search**: searches senders, recipients, subjects and message text. It works on the encrypted data (see below).
 - **From name**: email goes out under the sender's own name, unless the mailbox has a name of its own (set it under **Settings → Mailboxes**, for example *Acme Support* for a shared mailbox).
+- **Undo send**: after you press Send, the email waits 10 seconds with **Undo** (change it, or choose 5, 20 or 30 seconds, or none, under **Settings → Account**). The wait happens in your browser: close the page during it and the email isn't sent; it's in Drafts (the browser asks first).
+- **Send later**: the clock beside Send sends the email tomorrow morning, tomorrow afternoon, Monday morning or when you choose. **Scheduled** lists what's waiting: send it now, change the time, take it back to edit, or delete it. If it can't be sent (an address refused, say), it stays there marked *not sent*, with the reason, and you're notified.
+- **Templates**: replies you write often, with formatting and placeholders: `{first_name}`, `{last_name}`, `{name}`, `{email}`, `{company}`, `{ticket_id}`, `{subject}`, `{my_name}`, `{my_first_name}`, `{my_email}` and `{date}`. While writing, type `/` and the template's shortcut or name (`/refund`), press `Ctrl+/` (`⌘/` on a Mac), or use the Templates button. Placeholders are filled in from the first recipient (their name and company from your contacts), you, and the conversation (`{ticket_id}` is the conversation's reference, the same for everyone replying to it). One that can't be filled in stays as it is, and Send asks before it goes. Make them under **Settings → Templates**: your own, and shared ones that administrators keep for everyone.
 - **Writing**: rich text, attachments up to 20 MB, Cc and Bcc, address suggestions from people you've written to, and a signature per mailbox.
   The signature is the address's on GhostParse, so it's the same wherever the address's email is sent from (here,
   your website, your shop):
@@ -105,7 +111,21 @@ marks.
   - While writing, the signature shows under the message, with a switch to leave it out of that email.
   - Signatures from before 1.5.0 move to GhostParse by themselves, unless the address already has one there. Replies keep the thread together in the recipient's mail app too.
 - **Contacts**: two address books. **My contacts** is private to each person. **Shared** is seen by everyone, and administrators keep it up to date. Add contacts by hand, with **Add to contacts** on any email, or by importing a **.vcf** or **.csv** file from Gmail, Outlook, iPhone or Android. Importing fills in missing details for contacts you already have and never overwrites them. Export either book as a .vcf file. When you write an email, names and addresses are suggested from both books, then from people you've written to before.
-- **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `Esc` close.
+- **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `b` snooze, `l` labels, `Esc` close.
+
+### Send later and snooze
+
+Shared hosting often has no cron, so the webmail sends scheduled email and brings back snoozed email by itself: whenever
+someone is using it (the page checks every 30 seconds) and whenever email arrives. On a quiet webmail that nobody has
+open, that can be a little after the time. For exact times, add a cron job that calls `due.php` every minute (cPanel →
+**Cron Jobs**):
+
+```
+* * * * * curl -fsS https://your-site/mail/due.php >/dev/null
+```
+
+It only does what's already due, so it's safe for anyone to call. An email that was being sent when the server stopped
+part-way is never sent twice: it's marked *not sent*, to check in Sent first.
 
 ### On your phone and computer
 
