@@ -2,10 +2,13 @@
 // notifications arrive even when the webmail isn't open.
 "use strict";
 
-const VERSION = "wm-1.8.5";
+// Drafts kept on the device, finished saving here in the background (Background Sync).
+importScripts("assets/drafts.js?v=1.8.6");
+
+const VERSION = "wm-1.8.6";
 const SHELL = `${VERSION}-shell`;
 const MAIL = `${VERSION}-mail`;
-const SHELL_FILES = ["./", "assets/app.css?v=1.8.5", "assets/app.js?v=1.8.5", "assets/pwa.js?v=1.8.5", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
+const SHELL_FILES = ["./", "assets/app.css?v=1.8.6", "assets/app.js?v=1.8.6", "assets/pwa.js?v=1.8.6", "assets/drafts.js?v=1.8.6", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
 // API reads worth keeping for offline: the session, the lists and the messages you open.
 const OFFLINE_READS = new Set(["session", "messages", "message", "body", "contacts", "book"]);
 
@@ -62,16 +65,35 @@ self.addEventListener("message", (event) => {
   if (event.data === "signed-out") event.waitUntil(caches.delete(MAIL));
 });
 
+// Back online (Chrome, Edge, Android): drafts typed offline are saved to the server's Drafts folder. If some still
+// can't be, the browser tries again later.
+self.addEventListener("sync", (event) => {
+  if (event.tag !== "drafts") return;
+  event.waitUntil((async () => {
+    const s = await LocalDrafts.session().catch(() => null);
+    if (!s) return; // signed out: the webmail saves them after the next sign-in
+    await LocalDrafts.syncAll(s.user, s.csrf);
+    const left = (await LocalDrafts.all()).filter((r) => r.user === s.user && r.dirty).length;
+    if (left) throw new Error(`${left} drafts still to save`);
+  })());
+});
+
+/** The app icon's badge: the unread count GhostParse's push says, where the device shows badges. */
+function setBadge(n) {
+  if (typeof n !== "number" || !self.navigator.setAppBadge) return Promise.resolve();
+  return (n > 0 ? self.navigator.setAppBadge(n) : self.navigator.clearAppBadge()).catch(() => {});
+}
+
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { title: "New email" }; }
-  event.waitUntil(self.registration.showNotification(data.title || "New email", {
+  event.waitUntil(Promise.all([setBadge(data.unread), self.registration.showNotification(data.title || "New email", {
     body: data.body || "",
     tag: data.tag || undefined,
     icon: "assets/icons/icon-192.png",
     badge: "assets/icons/badge-96.png",
     data: { url: data.url || "./" },
-  }));
+  })]));
 });
 
 self.addEventListener("notificationclick", (event) => {

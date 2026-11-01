@@ -75,6 +75,7 @@ final class PwaTest extends TestCase
         $msg = json_decode($this->decrypt($toPhone['body'], $phone), true);
         $this->assertSame('Where is my order #1042?', $msg['body']);
         $this->assertMatchesRegularExpression('/^\.\/#m=\d+$/', $msg['url']);
+        $this->assertSame(1, $msg['unread'], 'the unread count, for the badge on the app\'s icon');
         $this->assertStringNotContainsString('1042', $toPhone['body'], 'the push service can\'t read it');
 
         // The VAPID token: ES256 over the push service's origin, verifiable with the public key we hand browsers.
@@ -227,5 +228,14 @@ final class PwaTest extends TestCase
         $pem = Passkeys::coseToPem([1 => 3, 3 => -257, -1 => $d['n'], -2 => $d['e']]);
         openssl_sign('hello', $sig, $key, OPENSSL_ALGO_SHA256);
         $this->assertSame(1, openssl_verify('hello', $sig, $pem, OPENSSL_ALGO_SHA256));
+    }
+
+    public function testTheShellCachesDraftsScriptAndTheServiceWorkerSavesDrafts(): void
+    {
+        $sw = file_get_contents(dirname(__DIR__) . '/sw.js');
+        $this->assertStringContainsString('importScripts("assets/drafts.js?v=' . \Webmail\App::VERSION . '")', $sw);
+        $this->assertStringContainsString('"assets/drafts.js?v=' . \Webmail\App::VERSION . '"', $sw);
+        $this->assertStringContainsString('addEventListener("sync"', $sw);
+        $this->assertStringContainsString('assets/drafts.js?v=', file_get_contents(dirname(__DIR__) . '/index.php'));
     }
 }

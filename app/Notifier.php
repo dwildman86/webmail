@@ -94,9 +94,19 @@ final class Notifier
             $payload = ['title' => mb_substr($sender, 0, 80), 'body' => mb_substr((string) (($data['subject'] ?? '') ?: '(no subject)'), 0, 140),
                 'tag' => 'm' . $s['id'], 'url' => './#m=' . $s['id']];
             foreach ($db->all('SELECT user_id FROM {user_mailboxes} WHERE mailbox_id = ?', [$s['mailbox_id']]) as $row) {
-                $this->notifyUser((int) $row['user_id'], $payload);
+                // With their unread count, for the badge on the app's icon.
+                $this->notifyUser((int) $row['user_id'], $payload + ['unread' => $this->unreadFor((int) $row['user_id'])]);
             }
         }
+    }
+
+    /** Unread email in the inbox of every mailbox the user can read. */
+    public function unreadFor(int $userId): int
+    {
+        return (int) $this->app->db->value(
+            "SELECT COUNT(*) FROM {messages} m JOIN {user_mailboxes} um ON um.mailbox_id = m.mailbox_id WHERE um.user_id = ? AND m.folder = 'inbox' AND m.is_read = 0",
+            [$userId],
+        );
     }
 
     /** Push to each of a user's devices; returns how many took it. Devices that have gone away are forgotten. */

@@ -33,6 +33,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
   <link rel="apple-touch-icon" href="assets/icons/icon-192.png">
   <link rel="stylesheet" href="assets/app.css?v=<?= $v ?>">
   <script src="assets/pwa.js?v=<?= $v ?>" defer></script>
+  <script src="assets/drafts.js?v=<?= $v ?>" defer></script>
   <script src="assets/app.js?v=<?= $v ?>" defer></script>
 </head>
 <body>

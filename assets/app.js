@@ -157,6 +157,7 @@ async function start() {
     await loadList();
     window.Notifications?.afterSignIn?.(s);
     runImports().catch(() => {}); // an import left running carries on
+    recoverDrafts().catch(() => {});
     // Back from signing in with Google or Microsoft to import email.
     const q = new URLSearchParams(location.search);
     if (q.has("mail_oauth") || q.has("mail_oauth_error")) {
@@ -322,6 +323,18 @@ async function signOut() {
   // installed app is the person's own phone or computer: notifications keep coming after signing out there.
   const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   if (!installed) await window.Notifications?.disable?.().catch(() => {});
+  // Drafts on the device go to the server first, then are deleted from it (it may be a shared computer).
+  if (window.LocalDrafts && state.user) {
+    flushCompose?.();
+    await LocalDrafts.syncAll(state.user.id, csrf).catch(() => 0);
+    const unsaved = (await LocalDrafts.all().catch(() => [])).filter((r) => r.user === state.user.id && r.dirty).length;
+    if (unsaved && !confirm(`${unsaved === 1 ? "A draft hasn't" : `${unsaved} drafts haven't`} been saved to the server yet (you're offline). Sign out and delete ${unsaved === 1 ? "it" : "them"} from this device?`)) return;
+    const mine = (await LocalDrafts.all().catch(() => [])).filter((r) => r.user === state.user.id);
+    for (const r of mine) await LocalDrafts.remove(r.key).catch(() => {});
+  }
+  document.querySelector(".overlay.compose-overlay")?.remove();
+  flushCompose = null;
+  try { navigator.clearAppBadge?.()?.catch?.(() => {}); } catch { /* not supported */ }
   await api("logout", { method: "POST" }).catch(() => {});
   navigator.serviceWorker?.controller?.postMessage("signed-out");
   $shell = null;
@@ -332,7 +345,14 @@ function unreadFor(folder) {
   return state.mailboxes.filter((m) => !state.mailbox || m.id === state.mailbox).reduce((n, m) => n + (m.unread?.[folder] || 0), 0);
 }
 
+/** The app icon's badge (installed app on iPhone, iPad, Android, Mac and Windows): unread email in the inbox. */
+function updateBadge() {
+  const n = state.user ? state.mailboxes.reduce((t, m) => t + (m.unread?.inbox || 0), 0) : 0;
+  try { (n > 0 ? navigator.setAppBadge?.(n) : navigator.clearAppBadge?.())?.catch?.(() => {}); } catch { /* not supported */ }
+}
+
 function renderFolders() {
+  updateBadge();
   renderTabbar();
   $search.placeholder = state.folder === "contacts" ? "Search contacts" : "Search mail";
   $search.setAttribute("aria-label", $search.placeholder);
@@ -777,8 +797,15 @@ async function compose(opts = {}) {
   contacts ??= api("contacts").then((r) => r.contacts).catch(() => []);
   const of = opts.of;
   const draft = opts.draft;
+  // The copy of this draft on the device: one being recovered, or a server draft's (newer, if it wasn't saved yet).
+  let local = opts.local || null;
+  if (!local && draft && window.LocalDrafts) {
+    local = (await LocalDrafts.all().catch(() => [])).find((r) => r.draft_id === draft.id && r.user === state.user.id) || null;
+  }
+  const lp = local?.payload;
   const mine = new Set(state.mailboxes.map((m) => m.address.toLowerCase()));
-  let fromId = draft?.mailbox_id || of?.mailbox_id || state.mailbox || state.mailboxes[0].id;
+  let fromId = lp?.mailbox_id || draft?.mailbox_id || of?.mailbox_id || state.mailbox || state.mailboxes[0].id;
+  if (!state.mailboxes.some((m) => m.id === fromId)) fromId = state.mailboxes[0].id;
   const replyTarget = of && (of.reply_to?.length ? of.reply_to : [of.from]).filter(Boolean);
   let to = opts.to ? [opts.to] : [], cc = [], subject = "", quoted = null;
   if (of && opts.mode !== "forward") {
@@ -795,14 +822,15 @@ async function compose(opts = {}) {
     quoted = h("blockquote", {}, ...header.flatMap((l) => [l, h("br")]), h("br"), ...(of.text || "").split("\n").flatMap((l) => [l, h("br")]));
   }
   if (draft) { to = draft.to.map((a) => a.address); cc = (draft.cc || []).map((a) => a.address); subject = draft.subject || ""; }
+  if (lp) { to = lp.to ? [lp.to] : []; cc = lp.cc ? [lp.cc] : []; subject = lp.subject || ""; }
 
   const fromSel = h("select", { "aria-label": "From", onchange: (e) => { fromId = Number(e.target.value); swapSignature(); } },
     state.mailboxes.map((m) => h("option", { value: String(m.id), selected: m.id === fromId }, m.display_name ? `${m.display_name} <${m.address}>` : m.address)));
   const toIn = h("input", { type: "text", value: to.join(", "), "aria-label": "To", autocomplete: "off" });
   const ccIn = h("input", { type: "text", value: cc.join(", "), "aria-label": "Cc", autocomplete: "off" });
-  const bccIn = h("input", { type: "text", value: "", "aria-label": "Bcc", autocomplete: "off" });
+  const bccIn = h("input", { type: "text", value: lp?.bcc || "", "aria-label": "Bcc", autocomplete: "off" });
   const ccRow = h("div", { class: "cf", hidden: !cc.length }, h("label", {}, "Cc"), ccIn);
-  const bccRow = h("div", { class: "cf", hidden: true }, h("label", {}, "Bcc"), bccIn);
+  const bccRow = h("div", { class: "cf", hidden: !lp?.bcc }, h("label", {}, "Bcc"), bccIn);
   const subjIn = h("input", { type: "text", value: subject, "aria-label": "Subject" });
   const editor = h("div", { class: "editor", contenteditable: "true", role: "textbox", "aria-multiline": "true", "aria-label": "Message", "data-placeholder": "Write your message…" });
   // The signature is the From address's on GhostParse, added when it's sent: shown here, with a switch to leave it out.
@@ -817,7 +845,11 @@ async function compose(opts = {}) {
       ? h("label", { class: "check" }, sigOn, h("span", {}, "Add my signature", preview))
       : h("span", { class: "muted small" }, s ? "No signature for this address yet: add one in Settings → Mailboxes." : "The signature couldn't be loaded; GhostParse adds it as usual."));
   };
-  if (draft) {
+  if (lp) {
+    // Typed by this person on this device: put back as it was (the page's security policy stops any script in it).
+    editor.innerHTML = lp.html || "";
+    sigOn.checked = lp.signature !== false;
+  } else if (draft) {
     const full = await api("message", { query: { id: String(draft.id), peek: "1" } }).catch(() => null);
     editor.append(...(full?.message.text || "").split("\n").flatMap((l) => [l, h("br")]));
     // Drafts from before 1.5.0 have the signature in their text already.
@@ -827,10 +859,10 @@ async function compose(opts = {}) {
     if (quoted) editor.append(h("br"), quoted);
   }
   swapSignature();
-  const files = [];
+  const files = [...(local?.attachments || [])];
   const attList = h("div", { class: "compose-atts" });
   const renderAtts = () => attList.replaceChildren(...files.map((f, i) => h("span", { class: "att" }, icon("clip"), h("span", {}, f.filename), h("small", { class: "muted" }, size(f.size)),
-    h("button", { type: "button", "aria-label": `Remove ${f.filename}`, onclick: () => { files.splice(i, 1); renderAtts(); } }, "✕"))));
+    h("button", { type: "button", "aria-label": `Remove ${f.filename}`, onclick: () => { files.splice(i, 1); renderAtts(); changed(); } }, "✕"))));
   const fileIn = h("input", { type: "file", multiple: true, hidden: true, onchange: async () => {
     for (const f of fileIn.files) {
       if (files.reduce((n, x) => n + x.size, 0) + f.size > 20 * 1024 * 1024) { toast("Attachments can add up to 20 MB."); break; }
@@ -839,21 +871,28 @@ async function compose(opts = {}) {
     }
     fileIn.value = "";
     renderAtts();
+    changed();
   } });
   const cmd = (name, value) => () => { editor.focus(); document.execCommand(name, false, value); };
   const status = h("span", { class: "muted small", role: "status" });
-  let draftId = draft?.id || null;
+  let draftId = local?.draft_id || draft?.id || null;
   const payload = () => {
     const clone = editor.cloneNode(true);
     return { mailbox_id: fromId, to: toIn.value, cc: ccIn.value, bcc: bccIn.value, subject: subjIn.value, html: clone.innerHTML, text: editor.innerText,
-      reply_to_id: of && opts.mode !== "forward" ? of.id : undefined, forward_of: of && opts.mode === "forward" ? of.id : undefined, attachments: files, draft_id: draftId || undefined,
+      reply_to_id: of && opts.mode !== "forward" ? of.id : lp?.reply_to_id, forward_of: of && opts.mode === "forward" ? of.id : lp?.forward_of, attachments: files, draft_id: draftId || undefined,
       signature: sigOn.checked };
   };
   const sendBtn = h("button", { class: "btn btn-primary", onclick: async () => {
     sendBtn.disabled = true;
     status.textContent = "Sending…";
     try {
+      // Any save that's under way finishes first, and nothing saves it again while it sends: the draft it made is the
+      // one the server deletes once it's sent.
+      await settle(false);
       const r = await api("send", { method: "POST", body: payload() });
+      finished = gone = true;
+      if (flushCompose === flushThis) flushCompose = null;
+      window.LocalDrafts?.remove(key).catch(() => {});
       overlay.remove();
       toast(r.suppressed?.length ? `Sent. Not sent to ${r.suppressed.join(", ")}: they bounced or complained before.` : "Sent.");
       refresh();
@@ -862,19 +901,87 @@ async function compose(opts = {}) {
       status.textContent = "";
       toast(err.message);
       sendBtn.disabled = false;
+      edited = true;
+      saveLocal(); // still unsent: kept on the device, and saved again
     }
   } }, "Send");
-  const saveDraft = async () => {
-    try {
-      const r = await api("draft", { method: "POST", body: payload() });
-      draftId = r.id;
-      status.textContent = `Draft saved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-    } catch (err) { status.textContent = err.message; }
+
+  // Autosave. Every change is kept on this device straight away (IndexedDB), then saved to Drafts on the server a few
+  // seconds after you stop typing. Offline, it stays on the device and is saved when the connection is back (by the
+  // service worker in the background where the browser can, or when the webmail next opens).
+  const key = local?.key || (draft ? `draft-${draft.id}` : `new-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+  // finished: closed, sent or discarded (no more timers); gone: sent or discarded (nothing to keep on the device).
+  let edited = !!local?.dirty, finished = false, gone = false, localTimer = null, serverTimer = null;
+  const savedAt = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const saveLocal = async () => {
+    clearTimeout(localTimer);
+    if (!window.LocalDrafts || !edited || gone) return;
+    const { attachments, draft_id: _ignored, ...rest } = payload();
+    await LocalDrafts.update(key, (cur) => ({ ...(cur || {}), key, user: state.user.id, updated: Date.now(), dirty: true, payload: rest, attachments }))
+      .catch(() => {});
   };
-  const overlay = h("div", { class: "overlay compose-overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); } },
+  const saveServer = async () => {
+    clearTimeout(serverTimer);
+    if (!edited || gone) return;
+    if (!window.LocalDrafts) { // no IndexedDB (some private windows): straight to the server, as before
+      try { draftId = (await api("draft", { method: "POST", body: payload() })).id; status.textContent = `Draft saved ${savedAt()}`; } catch (err) { status.textContent = err.message; }
+      return;
+    }
+    await saveLocal();
+    if (navigator.onLine === false) { status.textContent = "Saved on this device. It goes to Drafts when you're back online."; backgroundSave(); return; }
+    try {
+      const rec = await LocalDrafts.sync(key, csrf);
+      if (rec?.draft_id) draftId = rec.draft_id;
+      status.textContent = `Draft saved ${savedAt()}`;
+    } catch (err) {
+      if (err.status === 401) { status.textContent = "Saved on this device. Sign in again to save it to Drafts."; return; }
+      if (err.status && err.status < 500) { status.textContent = err.message; return; }
+      status.textContent = "Saved on this device. It goes to Drafts when the connection is back.";
+      backgroundSave();
+    }
+  };
+  /** Stop the timers and let a save that's under way finish; `keep` false: not saved again (it's being sent or discarded). */
+  const settle = async (keep) => {
+    clearTimeout(localTimer); clearTimeout(serverTimer);
+    if (!window.LocalDrafts) return;
+    await LocalDrafts.locked(key, async () => {
+      const rec = await LocalDrafts.update(key, (cur) => cur && !keep ? { ...cur, dirty: false } : null).catch(() => null);
+      if (rec?.draft_id) draftId = rec.draft_id;
+    });
+  };
+  function changed() {
+    if (finished) return;
+    edited = true;
+    status.textContent = "";
+    clearTimeout(localTimer); clearTimeout(serverTimer);
+    localTimer = setTimeout(saveLocal, 300);
+    serverTimer = setTimeout(saveServer, 4000);
+  }
+  const saveDraft = () => { edited = true; return saveServer(); };
+  /** Closing: anything not saved yet is saved now (and kept on the device until it is). */
+  const close = async () => {
+    overlay.remove();
+    if (flushCompose === flushThis) flushCompose = null;
+    if (finished) return;
+    finished = true;
+    if (edited) { await saveServer(); refresh(); }
+  };
+  const flushThis = () => saveLocal();
+  flushCompose = flushThis;
+  const discard = async () => {
+    finished = gone = true;
+    await settle(false);
+    await window.LocalDrafts?.remove(key).catch(() => {});
+    if (draftId) await api("messages/delete", { method: "POST", body: { ids: [draftId] } }).catch(() => {});
+    overlay.remove();
+    if (flushCompose === flushThis) flushCompose = null;
+    toast("Draft discarded.");
+    refresh();
+  };
+  const overlay = h("div", { class: "overlay compose-overlay", oninput: changed, onchange: changed, onclick: (e) => { if (e.target === overlay) close(); } },
     h("div", { class: "compose", role: "dialog", "aria-label": "New message" },
       h("div", { class: "compose-head" }, opts.mode === "forward" ? "Forward" : of ? "Reply" : "New message", h("span", { class: "spacer" }),
-        h("button", { class: "icon-btn", "aria-label": "Close", onclick: () => overlay.remove() }, icon("close"))),
+        h("button", { class: "icon-btn", "aria-label": "Close", onclick: close }, icon("close"))),
       h("div", { class: "compose-fields" },
         h("div", { class: "cf" }, h("label", {}, "From"), fromSel),
         h("div", { class: "cf" }, h("label", {}, "To"), toIn,
@@ -892,8 +999,9 @@ async function compose(opts = {}) {
         h("button", { class: "icon-btn", type: "button", title: "Attach files", "aria-label": "Attach files", onclick: () => fileIn.click() }, icon("clip")), fileIn),
       editor, sigBox, attList,
       h("div", { class: "compose-foot" }, sendBtn, h("button", { class: "btn", onclick: saveDraft }, "Save draft"), status, h("span", { class: "spacer" }),
-        draftId && h("button", { class: "icon-btn", title: "Discard draft", "aria-label": "Discard draft", onclick: async () => { await api("messages/delete", { method: "POST", body: { ids: [draftId] } }); overlay.remove(); refresh(); } }, icon("trash")))));
+        h("button", { class: "icon-btn", title: "Discard draft", "aria-label": "Discard draft", onclick: discard }, icon("trash")))));
   document.body.append(overlay);
+  if (local?.dirty) status.textContent = "Recovered from this device.";
   suggest(toIn, contacts); suggest(ccIn, contacts); suggest(bccIn, contacts);
   (to.length ? editor : toIn).focus();
   if (to.length) { const r = document.createRange(); r.setStart(editor, 0); r.collapse(true); getSelection().removeAllRanges(); getSelection().addRange(r); }
@@ -902,6 +1010,37 @@ async function compose(opts = {}) {
 async function openDraft(m) {
   compose({ draft: m });
 }
+
+// The open compose window's "save it now" (when the page is hidden or closed: the browser may not come back to it).
+let flushCompose = null;
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushCompose?.(); });
+addEventListener("pagehide", () => flushCompose?.());
+
+/** Ask the service worker to save drafts in the background once there's a connection (Chrome, Edge, Android). */
+function backgroundSave() {
+  navigator.serviceWorker?.ready.then((r) => r.sync?.register("drafts")).catch(() => {});
+}
+
+/**
+ * Drafts left on this device unsaved (the browser crashed, the tab was closed, or the connection dropped): saved to
+ * Drafts now, or offered back if there's still no connection.
+ */
+async function recoverDrafts() {
+  if (!window.LocalDrafts || !state.user) return;
+  const left = (await LocalDrafts.all().catch(() => [])).filter((r) => r.user === state.user.id && r.dirty);
+  if (!left.length) return;
+  const saved = navigator.onLine === false ? 0 : await LocalDrafts.syncAll(state.user.id, csrf).catch(() => 0);
+  if (saved) {
+    toast(saved === 1 ? "A draft that wasn't saved has been put back in Drafts." : `${saved} drafts that weren't saved have been put back in Drafts.`,
+      { label: "Open Drafts", run: () => openFolder("drafts") });
+    refresh();
+    return;
+  }
+  const newest = left.sort((a, b) => b.updated - a.updated)[0];
+  toast(left.length === 1 ? "You have an unsent draft saved on this device." : `You have ${left.length} unsent drafts saved on this device.`,
+    { label: "Open", run: () => compose({ local: newest }) });
+}
+addEventListener("online", () => { if (state.user && csrf) recoverDrafts(); });
 
 /** Address suggestions from the people you've written to. */
 function suggest(input, contactsPromise) {
