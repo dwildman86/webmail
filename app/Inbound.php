@@ -56,6 +56,11 @@ final class Inbound
         if ($id !== '') {
             $db->run('INSERT IGNORE INTO {events} (id, received_at) VALUES (?, ?)', [$id, App::now()]);
         }
+        try {
+            (new Team($this->app))->newMail($stored); // a resolved conversation the customer writes to again is open again
+        } catch (\Throwable $e) {
+            error_log('webmail: reopening the conversation failed: ' . $e->getMessage());
+        }
         foreach ($this->onNewMail as $fn) {
             try {
                 $fn($stored, $data);

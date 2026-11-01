@@ -57,6 +57,9 @@ const ICONS = {
   phone: "M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z",
   upload: "M12 16V4 M7 9l5-5 5 5 M4 20h16",
   download: "M12 4v12 M7 11l5 5 5-5 M4 20h16",
+  note: "M5 4h14v12l-4 4H5z M15 20v-4h4 M8 9h8 M8 13h5",
+  people: "M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z M2 20a7 7 0 0 1 14 0 M16 4.5a3.5 3.5 0 0 1 0 6.5 M18 14a6 6 0 0 1 4 6",
+  assign: "M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M3 20a7 7 0 0 1 11-5.7 M16 17l2 2 4-4",
 };
 const icon = (name) => h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
   h("path", { d: ICONS[name] }));
@@ -109,7 +112,11 @@ function toast(text, action) {
 // ------------------------------------------------------------------------------------------------ state
 const FOLDERS = [["inbox", "Inbox", "inbox"], ["starred", "Starred", "star"], ["sent", "Sent", "sent"], ["drafts", "Drafts", "drafts"],
   ["archive", "Archive", "archive"], ["spam", "Spam", "spam"], ["trash", "Trash", "trash"]];
-const state = { user: null, mailboxes: [], mailbox: 0, folder: "inbox", query: "", page: 1, messages: [], hasMore: false, selected: null, appInfo: {} };
+const state = { user: null, mailboxes: [], mailbox: 0, folder: "inbox", query: "", page: 1, messages: [], hasMore: false, selected: null, appInfo: {}, team: "" };
+/** Shared mailboxes (more than one person reads them) have notes, assignment and replies written together. */
+const sharedInView = () => state.mailboxes.some((m) => m.members > 1 && (!state.mailbox || m.id === state.mailbox));
+const TEAM_FILTERS = [["", "Everything"], ["mine", "Assigned to me"], ["unassigned", "Unassigned"], ["open", "Open"], ["in_progress", "In progress"], ["resolved", "Resolved"]];
+const STATUS_LABELS = { open: "Open", in_progress: "In progress", resolved: "Resolved" };
 
 // ------------------------------------------------------------------------------------------------ sign in
 function showLogin(message, { signedOut = false } = {}) {
@@ -452,10 +459,13 @@ async function loadList(append = false) {
   if (state.folder === "contacts") return loadContacts();
   const folder = state.query ? "all" : state.folder === "starred" ? "all" : state.folder;
   const label = state.query ? `Results for “${state.query}”` : FOLDERS.find((f) => f[0] === state.folder)[1];
-  $listTitle.replaceChildren(h("h2", {}, label));
+  const teamOn = sharedInView() && !["sent", "drafts"].includes(state.folder);
+  if (!teamOn) state.team = "";
+  $listTitle.replaceChildren(h("h2", {}, label), teamOn ? h("select", { class: "input team-filter", "aria-label": "Show", onchange: (e) => { state.team = e.target.value; state.page = 1; loadList(); } },
+    TEAM_FILTERS.map(([v, l]) => h("option", { value: v, selected: state.team === v }, l))) : "");
   if (!append) $list.replaceChildren(h("div", { class: "empty" }, "Loading…"));
   try {
-    const r = await api("messages", { query: { folder, mailbox: String(state.mailbox || ""), page: String(state.page), q: state.query, starred: state.folder === "starred" && !state.query ? "1" : "" } });
+    const r = await api("messages", { query: { folder, mailbox: String(state.mailbox || ""), page: String(state.page), q: state.query, starred: state.folder === "starred" && !state.query ? "1" : "", team: state.team } });
     state.messages = append ? state.messages.concat(r.messages) : r.messages;
     state.hasMore = r.has_more;
     renderList();
@@ -478,7 +488,10 @@ function renderList() {
     h("div", { class: "from" }, (m.folder === "sent" || m.folder === "drafts") ? `To: ${who(person)}` : who(person)),
     h("div", { class: "date" }, shortDate(m.date)),
     h("div", { class: "line" }, h("span", { class: "subject" }, m.subject || "(no subject)"), h("span", { class: "snippet" }, m.snippet ? `— ${m.snippet}` : ""),
-      h("span", { class: "flags" }, m.has_attachments && icon("clip"), m.starred && h("span", { class: "star" }, icon("star")), m.auth === "fail" && h("span", { class: "pill bad", title: "Failed SPF, DKIM and DMARC: be careful" }, "unverified")))));
+      h("span", { class: "flags" }, m.has_attachments && icon("clip"), m.starred && h("span", { class: "star" }, icon("star")), m.auth === "fail" && h("span", { class: "pill bad", title: "Failed SPF, DKIM and DMARC: be careful" }, "unverified"))),
+    m.team && (m.team.assignee || m.team.status !== "open") && h("div", { class: "team-line" },
+      m.team.status !== "open" && h("span", { class: `status-pill ${m.team.status}` }, STATUS_LABELS[m.team.status]),
+      m.team.assignee && h("span", { class: `assignee${m.team.assignee_id === state.user.id ? " me" : ""}` }, icon("assign"), m.team.assignee_id === state.user.id ? "You" : m.team.assignee))));
   });
   $list.replaceChildren(...rows, ...(state.hasMore ? [h("button", { class: "btn more", onclick: () => { state.page += 1; loadList(true); } }, "Load more")] : []));
 }
@@ -726,11 +739,121 @@ async function openMessage(id) {
     h("button", { class: "icon-btn", title: "Reply all", "aria-label": "Reply all", onclick: () => compose({ mode: "replyAll", of: last() }) }, icon("replyAll")),
     h("button", { class: "icon-btn", title: "Forward (f)", "aria-label": "Forward", onclick: () => compose({ mode: "forward", of: last() }) }, icon("forward")));
   const mails = current.thread.map((t, i) => mailCard(t, i === current.thread.length - 1 || t.id === m.id));
-  $reader.replaceChildren(bar, h("div", { class: "reader-body" }, h("h1", {}, m.subject || "(no subject)"), mails,
+  const shared = state.mailboxes.find((x) => x.id === m.mailbox_id)?.members > 1;
+  const teamTop = h("div", { class: "team-top" });
+  const teamNotes = h("section", { class: "team-notes", "aria-label": "Team notes" });
+  $reader.replaceChildren(bar, h("div", { class: "reader-body" }, h("h1", {}, m.subject || "(no subject)"), shared && teamTop, mails,
     h("div", { class: "reply-row" },
       h("button", { class: "btn", onclick: () => compose({ mode: "reply", of: last() }) }, icon("reply"), "Reply"),
       h("button", { class: "btn", onclick: () => compose({ mode: "replyAll", of: last() }) }, icon("replyAll"), "Reply all"),
-      h("button", { class: "btn", onclick: () => compose({ mode: "forward", of: last() }) }, icon("forward"), "Forward"))));
+      h("button", { class: "btn", onclick: () => compose({ mode: "forward", of: last() }) }, icon("forward"), "Forward"),
+      shared && h("button", { class: "btn", title: "A reply the team writes together, live", onclick: () => compose({ mode: "reply", of: last(), share: true }) }, icon("people"), "Write together")),
+    shared && teamNotes));
+  if (shared) teamPanel(m, teamTop, teamNotes);
+}
+
+// ------------------------------------------------------------------------------------------------ shared mailboxes
+// Who a conversation is assigned to and where it's up to, the team's private notes, and the reply someone's writing
+// with the team. Checked every 15 seconds while the conversation is open.
+let teamTimer = null;
+async function teamPanel(m, top, notesBox) {
+  clearTimeout(teamTimer);
+  const id = m.id;
+  let data = null;
+  const still = () => current?.message.id === id && top.isConnected;
+  const load = async () => {
+    try { data = await api("team/thread", { query: { id: String(id) } }); } catch { return; }
+    if (!still()) return;
+    render();
+  };
+  const assign = async (body) => {
+    try { data = await api("team/assign", { method: "POST", body: { message_id: id, ...body } }); render(); loadList(); }
+    catch (err) { toast(err.message); }
+  };
+  const render = () => {
+    const keepNote = notesBox.querySelector("textarea")?.value || "";
+    const focused = document.activeElement?.closest?.(".team-notes textarea") != null;
+    top.replaceChildren(...[
+      h("label", { class: "team-field" }, icon("assign"), h("span", { class: "sr" }, "Assigned to"),
+        h("select", { "aria-label": "Assigned to", onchange: (e) => assign({ assignee_id: e.target.value ? Number(e.target.value) : null }) },
+          h("option", { value: "" }, "Unassigned"),
+          data.members.map((p) => h("option", { value: String(p.id), selected: p.id === data.assignee_id }, p.id === state.user.id ? `${p.name} (you)` : p.name)))),
+      h("div", { class: "status-seg", role: "group", "aria-label": "Status" }, Object.entries(data.statuses).map(([k, label]) =>
+        h("button", { type: "button", class: `${k}${data.status === k ? " on" : ""}`, "aria-pressed": String(data.status === k), onclick: () => data.status !== k && assign({ status: k }) }, label))),
+      data.assignee_id !== state.user.id && h("button", { class: "btn btn-sm", onclick: () => assign({ assignee_id: state.user.id, ...(data.status === "open" ? { status: "in_progress" } : {}) }) }, "Take it"),
+      data.draft && h("div", { class: "team-draft" }, icon("people"),
+        data.draft.editors.length ? `${data.draft.editors.map((e) => e.name).join(" and ")} ${data.draft.editors.length > 1 ? "are" : "is"} writing a reply` : `${data.draft.started_by} started a shared reply`,
+        h("button", { class: "btn btn-sm btn-primary", onclick: () => compose({ mode: "reply", of: last(), share: true }) }, "Join"))].filter(Boolean));
+    const box = h("textarea", { rows: 2, placeholder: "Add a note for the team… type @ to mention someone", maxlength: 5000,
+      onkeydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); post(); } } });
+    box.value = keepNote;
+    const post = async () => {
+      const body = box.value.trim();
+      if (!body) return;
+      box.disabled = true;
+      try { await api("team/note", { method: "POST", body: { message_id: id, body } }); box.value = ""; await load(); notesBox.querySelector("textarea")?.focus(); }
+      catch (err) { toast(err.message); box.disabled = false; }
+    };
+    notesBox.replaceChildren(
+      h("h3", {}, icon("note"), "Team notes", h("span", { class: "muted small" }, ` Only people who share ${state.mailboxes.find((x) => x.id === m.mailbox_id)?.address || "this mailbox"} see these. They're never sent.`)),
+      data.notes.length ? h("ol", { class: "notes" }, data.notes.map((n) => noteItem(n, load))) : h("p", { class: "muted small" }, "No notes yet."),
+      h("div", { class: "note-write" }, box, h("button", { class: "btn btn-primary btn-sm", onclick: post }, "Add note")));
+    mentionPicker(box, data.members.filter((p) => p.id !== state.user.id));
+    if (focused) box.focus();
+  };
+  await load();
+  const tick = async () => { if (!still()) return; if (document.visibilityState === "visible") await load(); teamTimer = setTimeout(tick, 15000); };
+  teamTimer = setTimeout(tick, 15000);
+}
+
+function noteItem(n, reload) {
+  const when = h("time", { datetime: n.date, title: longDate(n.date) }, shortDate(n.date));
+  if (n.kind === "event") return h("li", { class: "event" }, h("strong", {}, n.name || "Webmail"), ` ${n.body} · `, when);
+  // Mentions stand out; the text is only ever text.
+  const body = h("div", { class: "note-body" }, ...n.body.split(/(@[\p{L}\p{N}][\p{L}\p{N}._-]*)/u).map((part, i) => (i % 2 ? h("span", { class: "mention" }, part) : part)));
+  return h("li", { class: `note${n.mentions.includes(state.user.id) ? " to-me" : ""}` },
+    h("div", { class: "note-head" }, avatar({ name: n.name, address: n.name }), h("strong", {}, n.mine ? "You" : n.name), when,
+      (n.mine || state.user.role === "admin") && h("button", { class: "icon-btn", title: "Delete note", "aria-label": "Delete note", onclick: async () => {
+        if (!confirm("Delete this note?")) return;
+        try { await api("team/note/delete", { method: "POST", body: { id: n.id } }); reload(); } catch (err) { toast(err.message); }
+      } }, icon("trash"))),
+    body);
+}
+
+/** Typing "@" in a note offers the people on the mailbox; picking one writes their first name. */
+function mentionPicker(box, people) {
+  const list = h("ul", { class: "mentions", role: "listbox", hidden: true });
+  box.after(list);
+  let matches = [], at = -1, pick = 0;
+  const handle = (p) => (p.name.split(/\s+/)[0] || p.email.split("@")[0]);
+  const close = () => { list.hidden = true; at = -1; };
+  const choose = (p) => {
+    const before = box.value.slice(0, at), after = box.value.slice(box.selectionStart);
+    box.value = `${before}@${handle(p)} ${after}`;
+    const pos = before.length + handle(p).length + 2;
+    box.setSelectionRange(pos, pos); close(); box.focus();
+  };
+  const show = () => {
+    list.replaceChildren(...matches.map((p, i) => h("li", { role: "option", class: i === pick ? "on" : "", onmousedown: (e) => { e.preventDefault(); choose(p); } },
+      avatar({ name: p.name, address: p.email }), h("span", {}, p.name), h("small", { class: "muted" }, p.email))));
+    list.hidden = !matches.length;
+  };
+  box.addEventListener("input", () => {
+    const upto = box.value.slice(0, box.selectionStart);
+    const mm = /(?:^|\s)@([\p{L}\p{N}._-]*)$/u.exec(upto);
+    if (!mm) return close();
+    at = upto.length - mm[1].length - 1;
+    const q = mm[1].toLowerCase();
+    matches = people.filter((p) => p.name.toLowerCase().split(/\s+/).some((w) => w.startsWith(q)) || p.email.toLowerCase().startsWith(q)).slice(0, 6);
+    pick = 0; show();
+  });
+  box.addEventListener("keydown", (e) => {
+    if (list.hidden) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); pick = (pick + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length; show(); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); e.stopPropagation(); choose(matches[pick]); }
+    else if (e.key === "Escape") close();
+  });
+  box.addEventListener("blur", () => setTimeout(close, 150));
 }
 const last = () => [...current.thread].reverse().find((t) => t.folder !== "sent") || current.thread[current.thread.length - 1];
 
@@ -778,6 +901,7 @@ function mailCard(t, open) {
 }
 
 function closeReader() {
+  clearTimeout(teamTimer);
   state.selected = null;
   current = null;
   $shell.classList.remove("reading");
@@ -797,6 +921,8 @@ async function compose(opts = {}) {
   contacts ??= api("contacts").then((r) => r.contacts).catch(() => []);
   const of = opts.of;
   const draft = opts.draft;
+  // A reply written with the team (shared mailboxes): the conversation's one shared reply, started or joined below.
+  let shared = null;
   // The copy of this draft on the device: one being recovered, or a server draft's (newer, if it wasn't saved yet).
   let local = opts.local || null;
   if (!local && draft && window.LocalDrafts) {
@@ -859,6 +985,20 @@ async function compose(opts = {}) {
     if (quoted) editor.append(h("br"), quoted);
   }
   swapSignature();
+  if (opts.share && of) {
+    // Start the conversation's shared reply with what's here, or join the one someone's already writing.
+    try {
+      shared = await api("team/draft/start", { method: "POST", body: { message_id: of.id, fields: { to: toIn.value, cc: ccIn.value, bcc: bccIn.value, subject: subjIn.value, html: editor.innerHTML, text: editor.innerText, signature: sigOn.checked } } });
+    } catch (err) { toast(err.message); return; }
+    fromId = shared.mailbox_id;
+    fromSel.value = String(fromId);
+    fromSel.disabled = true;
+    swapSignature();
+    toIn.value = shared.fields.to; ccIn.value = shared.fields.cc; bccIn.value = shared.fields.bcc; subjIn.value = shared.fields.subject;
+    ccRow.hidden = !shared.fields.cc; bccRow.hidden = !shared.fields.bcc;
+    sigOn.checked = shared.fields.signature !== false;
+    editor.innerHTML = shared.fields.html;
+  }
   const files = [...(local?.attachments || [])];
   const attList = h("div", { class: "compose-atts" });
   const renderAtts = () => attList.replaceChildren(...files.map((f, i) => h("span", { class: "att" }, icon("clip"), h("span", {}, f.filename), h("small", { class: "muted" }, size(f.size)),
@@ -879,8 +1019,8 @@ async function compose(opts = {}) {
   const payload = () => {
     const clone = editor.cloneNode(true);
     return { mailbox_id: fromId, to: toIn.value, cc: ccIn.value, bcc: bccIn.value, subject: subjIn.value, html: clone.innerHTML, text: editor.innerText,
-      reply_to_id: of && opts.mode !== "forward" ? of.id : lp?.reply_to_id, forward_of: of && opts.mode === "forward" ? of.id : lp?.forward_of, attachments: files, draft_id: draftId || undefined,
-      signature: sigOn.checked };
+      reply_to_id: shared ? shared.reply_to_id : of && opts.mode !== "forward" ? of.id : lp?.reply_to_id, forward_of: of && opts.mode === "forward" ? of.id : lp?.forward_of, attachments: files,
+      draft_id: shared ? undefined : draftId || undefined, shared_draft_id: shared?.id, signature: sigOn.checked };
   };
   const sendBtn = h("button", { class: "btn btn-primary", onclick: async () => {
     sendBtn.disabled = true;
@@ -889,7 +1029,9 @@ async function compose(opts = {}) {
       // Any save that's under way finishes first, and nothing saves it again while it sends: the draft it made is the
       // one the server deletes once it's sent.
       await settle(false);
+      if (shared) await team.flush();
       const r = await api("send", { method: "POST", body: payload() });
+      team.stop();
       finished = gone = true;
       if (flushCompose === flushThis) flushCompose = null;
       window.LocalDrafts?.remove(key).catch(() => {});
@@ -915,7 +1057,7 @@ async function compose(opts = {}) {
   const savedAt = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const saveLocal = async () => {
     clearTimeout(localTimer);
-    if (!window.LocalDrafts || !edited || gone) return;
+    if (!window.LocalDrafts || !edited || gone || shared) return;
     const { attachments, draft_id: _ignored, ...rest } = payload();
     await LocalDrafts.update(key, (cur) => ({ ...(cur || {}), key, user: state.user.id, updated: Date.now(), dirty: true, payload: rest, attachments }))
       .catch(() => {});
@@ -923,6 +1065,7 @@ async function compose(opts = {}) {
   const saveServer = async () => {
     clearTimeout(serverTimer);
     if (!edited || gone) return;
+    if (shared) return team.flush();
     if (!window.LocalDrafts) { // no IndexedDB (some private windows): straight to the server, as before
       try { draftId = (await api("draft", { method: "POST", body: payload() })).id; status.textContent = `Draft saved ${savedAt()}`; } catch (err) { status.textContent = err.message; }
       return;
@@ -951,6 +1094,7 @@ async function compose(opts = {}) {
   };
   function changed() {
     if (finished) return;
+    if (shared) return team.changed();
     edited = true;
     status.textContent = "";
     clearTimeout(localTimer); clearTimeout(serverTimer);
@@ -962,6 +1106,7 @@ async function compose(opts = {}) {
   const close = async () => {
     overlay.remove();
     if (flushCompose === flushThis) flushCompose = null;
+    if (shared) { finished = true; await team.flush(); team.leave(); return; }
     if (finished) return;
     finished = true;
     if (edited) { await saveServer(); refresh(); }
@@ -969,6 +1114,15 @@ async function compose(opts = {}) {
   const flushThis = () => saveLocal();
   flushCompose = flushThis;
   const discard = async () => {
+    if (shared) {
+      if (!confirm("Delete this shared reply for everyone writing it?")) return;
+      team.stop();
+      try { await api("team/draft/delete", { method: "POST", body: { id: shared.id } }); } catch (err) { if (err.status !== 404) { toast(err.message); return; } }
+      overlay.remove();
+      toast("Shared reply deleted.");
+      if (current) openMessage(current.message.id);
+      return;
+    }
     finished = gone = true;
     await settle(false);
     await window.LocalDrafts?.remove(key).catch(() => {});
@@ -978,9 +1132,11 @@ async function compose(opts = {}) {
     toast("Draft discarded.");
     refresh();
   };
+  const team = shared ? sharedReply({ shared, editor, status, inputs: { to: toIn, cc: ccIn, bcc: bccIn, subject: subjIn }, sigOn, ccRow, bccRow,
+    gone: (message) => { overlay.remove(); finished = gone = true; toast(message); if (current) openMessage(current.message.id); } }) : { stop() {}, flush() {} };
   const overlay = h("div", { class: "overlay compose-overlay", oninput: changed, onchange: changed, onclick: (e) => { if (e.target === overlay) close(); } },
     h("div", { class: "compose", role: "dialog", "aria-label": "New message" },
-      h("div", { class: "compose-head" }, opts.mode === "forward" ? "Forward" : of ? "Reply" : "New message", h("span", { class: "spacer" }),
+      h("div", { class: "compose-head" }, shared ? "Reply with the team" : opts.mode === "forward" ? "Forward" : of ? "Reply" : "New message", shared && team.presence, h("span", { class: "spacer" }),
         h("button", { class: "icon-btn", "aria-label": "Close", onclick: close }, icon("close"))),
       h("div", { class: "compose-fields" },
         h("div", { class: "cf" }, h("label", {}, "From"), fromSel),
@@ -998,10 +1154,12 @@ async function compose(opts = {}) {
         h("button", { class: "icon-btn", type: "button", title: "Link", "aria-label": "Link", onclick: () => { const u = prompt("Link address (https://…)"); if (u && /^https?:\/\//i.test(u)) cmd("createLink", u)(); } }, icon("link")),
         h("button", { class: "icon-btn", type: "button", title: "Attach files", "aria-label": "Attach files", onclick: () => fileIn.click() }, icon("clip")), fileIn),
       editor, sigBox, attList,
-      h("div", { class: "compose-foot" }, sendBtn, h("button", { class: "btn", onclick: saveDraft }, "Save draft"), status, h("span", { class: "spacer" }),
-        h("button", { class: "icon-btn", title: "Discard draft", "aria-label": "Discard draft", onclick: discard }, icon("trash")))));
+      shared && h("p", { class: "muted small shared-note" }, "Everyone writing this sees each change as it's made. Attachments you add are only on your screen until you send."),
+      h("div", { class: "compose-foot" }, sendBtn, !shared && h("button", { class: "btn", onclick: saveDraft }, "Save draft"), status, h("span", { class: "spacer" }),
+        h("button", { class: "icon-btn", title: shared ? "Delete the shared reply" : "Discard draft", "aria-label": "Discard draft", onclick: discard }, icon("trash")))));
   document.body.append(overlay);
   if (local?.dirty) status.textContent = "Recovered from this device.";
+  if (shared) team.start(overlay);
   suggest(toIn, contacts); suggest(ccIn, contacts); suggest(bccIn, contacts);
   (to.length ? editor : toIn).focus();
   if (to.length) { const r = document.createRange(); r.setStart(editor, 0); r.collapse(true); getSelection().removeAllRanges(); getSelection().addRange(r); }
@@ -1009,6 +1167,204 @@ async function compose(opts = {}) {
 
 async function openDraft(m) {
   compose({ draft: m });
+}
+
+// ------------------------------------------------------------------------------------------------ writing together
+// A shared reply is saved with the version it was based on. If someone saved first, the server says so with theirs, and
+// the two are merged: per field, and in the message paragraph by paragraph (and within a paragraph, if the two changed
+// different parts of it). What's merged is saved again. Everyone's copy is checked every 1.5 seconds.
+
+const escapeText = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const blockHtml = (n) => (n.nodeType === 1 ? n.outerHTML : escapeText(n.textContent));
+function blocksOf(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  return [...t.content.childNodes].map(blockHtml);
+}
+/** Matching items of a and b, in order (longest common subsequence): [[i, j], …]. */
+function lcsPairs(a, b) {
+  const n = a.length, m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  for (let i = 0, j = 0; i < n && j < m;) {
+    if (a[i] === b[j]) { out.push([i, j]); i++; j++; } else if (dp[i + 1][j] >= dp[i][j + 1]) i++; else j++;
+  }
+  return out;
+}
+/** Both people's changes to one piece of text, if they changed different parts of it; else null. */
+function mergeText(base, mine, theirs) {
+  const region = (x) => {
+    let p = 0;
+    while (p < base.length && p < x.length && base[p] === x[p]) p++;
+    let q = 0;
+    while (q < base.length - p && q < x.length - p && base[base.length - 1 - q] === x[x.length - 1 - q]) q++;
+    return { start: p, end: base.length - q, text: x.slice(p, x.length - q) };
+  };
+  const a = region(mine), b = region(theirs);
+  if (a.end <= b.start) return base.slice(0, a.start) + a.text + base.slice(a.end, b.start) + b.text + base.slice(b.end);
+  if (b.end <= a.start) return base.slice(0, b.start) + b.text + base.slice(b.end, a.start) + a.text + base.slice(a.end);
+  return null;
+}
+const same = (x, y) => x.length === y.length && x.every((v, i) => v === y[i]);
+/** What one side changed, as hunks: base[start, end) became lines. */
+function hunks(base, x) {
+  const out = [];
+  let b = 0, j0 = 0;
+  for (const [i, j] of [...lcsPairs(base, x), [base.length, x.length]]) {
+    if (i > b || j > j0) out.push({ start: b, end: i, lines: x.slice(j0, j) });
+    b = i + 1; j0 = j + 1;
+  }
+  return out;
+}
+function applyHunks(base, list, from, to) {
+  const out = [];
+  let k = from;
+  for (const hk of list) { out.push(...base.slice(k, hk.start), ...hk.lines); k = hk.end; }
+  return out.concat(base.slice(k, to));
+}
+/** A three-way merge of two people's changes to the same paragraphs; where they touch the same ones, see resolveBlocks. */
+function mergeBlocks(base, mine, theirs) {
+  if (same(mine, base)) return theirs;
+  if (same(theirs, base) || same(mine, theirs)) return mine;
+  if (base.length * Math.max(mine.length, theirs.length) > 250000) return mine; // too long to compare: keep what's typed here
+  const all = [...hunks(base, mine).map((x) => ({ ...x, mine: true })), ...hunks(base, theirs).map((x) => ({ ...x, mine: false }))]
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const groups = [];
+  for (const hk of all) {
+    const g = groups[groups.length - 1];
+    if (g && (hk.start < g.end || hk.start === g.start)) { g.list.push(hk); g.end = Math.max(g.end, hk.end); }
+    else groups.push({ start: hk.start, end: hk.end, list: [hk] });
+  }
+  const out = [];
+  let k = 0;
+  for (const g of groups) {
+    out.push(...base.slice(k, g.start));
+    const m = g.list.filter((x) => x.mine), t = g.list.filter((x) => !x.mine);
+    if (!t.length) out.push(...applyHunks(base, m, g.start, g.end));
+    else if (!m.length) out.push(...applyHunks(base, t, g.start, g.end));
+    else {
+      const mc = applyHunks(base, m, g.start, g.end), tc = applyHunks(base, t, g.start, g.end);
+      out.push(...(same(mc, tc) ? mc : resolveBlocks(base.slice(g.start, g.end), mc, tc)));
+    }
+    k = g.end;
+  }
+  return out.concat(base.slice(k));
+}
+/** Both changed the same stretch of paragraphs. */
+function resolveBlocks(bc, mc, tc) {
+  // Different parts of the same text (one split a paragraph, the other added to its end): both.
+  const merged = mergeText(bc.join(""), mc.join(""), tc.join(""));
+  if (merged !== null) return blocksOf(merged);
+  if (bc.length === 1) {
+    // One side left the paragraph as it was and added others around it: the other side's change to it goes in its place.
+    const plain = (x) => { const t = document.createElement("template"); t.innerHTML = x; return t.content.textContent.replace(/\s+/g, " ").trim(); };
+    const was = plain(bc[0]);
+    const i = mc.findIndex((x) => x === bc[0] || plain(x) === was);
+    if (i >= 0) return [...mc.slice(0, i), ...tc, ...mc.slice(i + 1)];
+    const j = tc.findIndex((x) => x === bc[0] || plain(x) === was);
+    if (j >= 0) return [...tc.slice(0, j), ...mc, ...tc.slice(j + 1)];
+  }
+  return [...tc, ...mc.filter((x) => !tc.includes(x))]; // really both changed the same words: keep both, theirs first
+}
+const mergeHtml = (base, mine, theirs) => mergeBlocks(blocksOf(base), blocksOf(mine), blocksOf(theirs)).join("");
+
+/** Replace the message's content, keeping the cursor where it was (in the same paragraph, at the same place). */
+function setEditorHtml(editor, html) {
+  if (editor.innerHTML === html) return;
+  const sel = getSelection();
+  let caret = null;
+  if (sel.rangeCount && sel.anchorNode !== editor && editor.contains(sel.anchorNode)) {
+    let blk = sel.anchorNode;
+    while (blk.parentNode !== editor) blk = blk.parentNode;
+    const r = document.createRange();
+    r.setStart(blk, 0); r.setEnd(sel.anchorNode, sel.anchorOffset);
+    caret = { idx: [...editor.childNodes].indexOf(blk), html: blockHtml(blk), offset: r.toString().length };
+  }
+  editor.innerHTML = html;
+  if (!caret || !editor.childNodes.length) return;
+  const blocks = [...editor.childNodes].map(blockHtml);
+  let best = -1;
+  blocks.forEach((b, i) => { if (b === caret.html && (best < 0 || Math.abs(i - caret.idx) < Math.abs(best - caret.idx))) best = i; });
+  const node = editor.childNodes[best >= 0 ? best : Math.min(caret.idx, blocks.length - 1)];
+  const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  let left = caret.offset, at = null;
+  for (let t = node.nodeType === 3 ? node : walk.nextNode(); t; t = walk.nextNode()) {
+    if (left <= t.textContent.length) { at = [t, left]; break; }
+    left -= t.textContent.length;
+  }
+  const r = document.createRange();
+  if (at) r.setStart(at[0], at[1]); else { r.selectNodeContents(node); r.collapse(false); }
+  r.collapse(true);
+  sel.removeAllRanges(); sel.addRange(r);
+}
+
+function sharedReply({ shared, editor, status, inputs, sigOn, ccRow, bccRow, gone }) {
+  let base = shared.version, baseFields = shared.fields, stopped = false, pushing = null, pushTimer = null, pollTimer = null, composing = false, overlay = null;
+  const presence = h("span", { class: "presence" });
+  const fieldsNow = () => ({ to: inputs.to.value, cc: inputs.cc.value, bcc: inputs.bcc.value, subject: inputs.subject.value, html: editor.innerHTML, text: editor.innerText, signature: sigOn.checked });
+  const comparable = (f) => JSON.stringify([f.to, f.cc, f.bcc, f.subject, f.html, f.signature !== false]);
+  const showPresence = (d) => presence.replaceChildren(...(d.editors?.length
+    ? [icon("people"), d.editors.map((e) => `${e.name}${e.typing ? " is typing…" : ""}`).join(", ")]
+    : [h("span", { class: "muted" }, "No one else has it open")]));
+  showPresence(shared);
+  editor.addEventListener("compositionstart", () => { composing = true; });
+  editor.addEventListener("compositionend", () => { composing = false; });
+  /** Merge someone else's version with what's here; true if what's here has more to save. */
+  const merge = (remote) => {
+    const mine = fieldsNow(), theirs = remote.fields, out = {};
+    for (const k of ["to", "cc", "bcc", "subject", "signature"]) out[k] = mine[k] === baseFields[k] ? theirs[k] : mine[k];
+    out.html = mine.html === baseFields.html ? theirs.html : mergeHtml(baseFields.html, mine.html, theirs.html);
+    for (const k of ["to", "cc", "bcc", "subject"]) if (inputs[k].value !== out[k]) inputs[k].value = out[k];
+    ccRow.hidden = ccRow.hidden && !out.cc; bccRow.hidden = bccRow.hidden && !out.bcc;
+    sigOn.checked = out.signature !== false;
+    setEditorHtml(editor, out.html);
+    base = remote.version; baseFields = theirs;
+    if (remote.updated_by_id !== state.user.id) status.textContent = `${remote.updated_by} changed it just now`;
+    return comparable(fieldsNow()) !== comparable(theirs);
+  };
+  const push = async () => {
+    clearTimeout(pushTimer);
+    if (stopped) return;
+    const mine = fieldsNow();
+    if (comparable(mine) === comparable(baseFields)) return;
+    try {
+      const r = await api("team/draft/save", { method: "POST", body: { id: shared.id, version: base, fields: mine } });
+      base = r.version; baseFields = mine;
+      showPresence(r);
+      status.textContent = `Saved for the team ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    } catch (err) {
+      if (err.status === 409 && err.data?.draft) { merge(err.data.draft); return push(); }
+      if (err.status === 404) { stop(); gone("This shared reply has been sent or deleted by someone else."); return; }
+      status.textContent = "Couldn't save just now; trying again…";
+      pushTimer = setTimeout(() => flush(), 3000);
+    }
+  };
+  /** Save now (one save at a time). */
+  const flush = () => (pushing ??= push().finally(() => { pushing = null; }));
+  const poll = async () => {
+    if (stopped) return;
+    if (!overlay?.isConnected) return stop();
+    if (!pushing && !composing && document.visibilityState === "visible") {
+      try {
+        const d = await api("team/draft", { query: { id: String(shared.id) } });
+        showPresence(d);
+        if (!pushing && d.version > base && merge(d)) flush();
+      } catch (err) {
+        if (err.status === 404) { stop(); gone("This shared reply has been sent or deleted by someone else."); return; }
+      }
+    }
+    pollTimer = setTimeout(poll, 1500);
+  };
+  const stop = () => { stopped = true; clearTimeout(pushTimer); clearTimeout(pollTimer); };
+  return {
+    presence,
+    start(o) { overlay = o; pollTimer = setTimeout(poll, 1500); },
+    changed() { clearTimeout(pushTimer); pushTimer = setTimeout(flush, 600); },
+    flush: () => (stopped ? Promise.resolve() : flush()),
+    stop,
+    leave() { stop(); api("team/draft/leave", { method: "POST", body: { id: shared.id } }).catch(() => {}); },
+  };
 }
 
 // The open compose window's "save it now" (when the page is hidden or closed: the browser may not come back to it).

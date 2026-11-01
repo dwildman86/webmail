@@ -121,7 +121,7 @@ try {
             Http::json(['recovery_codes' => $mfa->newRecoveryCodes($user['id'])]);
         case 'GET messages':
             Http::json($store->list($user['id'], $int('mailbox') ?: null, (string) ($_GET['folder'] ?? 'inbox'), max(1, $int('page')),
-                (string) ($_GET['q'] ?? ''), ($_GET['starred'] ?? '') === '1'));
+                (string) ($_GET['q'] ?? ''), ($_GET['starred'] ?? '') === '1', (string) ($_GET['team'] ?? '')));
         case 'GET message':
             Http::json($store->get($user['id'], $int('id'), ($_GET['peek'] ?? '') !== '1'));
         case 'GET body':
@@ -289,6 +289,9 @@ try {
             Http::json(['ok' => true]);
     }
 
+    if (str_starts_with($action, 'team/')) {
+        (new \Webmail\Team($app))->route($action, $method, $user);
+    }
     if (str_starts_with($action, 'admin/')) {
         $auth->requireAdmin();
         (new Admin($app))->route($action, $method, $user);
@@ -301,7 +304,7 @@ try {
     }
     throw new HttpError(404, 'Unknown action', 'not_found');
 } catch (HttpError $e) {
-    Http::json(['error' => $e->errorCode, 'message' => $e->getMessage()], $e->status);
+    Http::json(['error' => $e->errorCode, 'message' => $e->getMessage()] + $e->data, $e->status);
 } catch (\Throwable $e) {
     error_log('webmail api: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
     Http::json(['error' => 'server_error', 'message' => 'Something went wrong. The details are in the server log.'], 500);

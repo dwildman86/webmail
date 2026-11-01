@@ -88,6 +88,8 @@ final class Mailstore
         $rows = $this->app->db->all('SELECT m.* FROM {mailboxes} m JOIN {user_mailboxes} um ON um.mailbox_id = m.id WHERE um.user_id = ? ORDER BY m.id', [$userId]);
         $out = array_map(fn ($r) => $this->presentMailbox($r), $rows);
         foreach ($out as &$m) {
+            // How many people read it: more than one, and it's a shared mailbox (notes, assignment, replies written together).
+            $m['members'] = (int) $this->app->db->value('SELECT COUNT(*) FROM {user_mailboxes} um JOIN {users} u ON u.id = um.user_id WHERE um.mailbox_id = ? AND u.disabled = 0', [$m['id']]);
             $m['unread'] = array_fill_keys(self::FOLDERS, 0);
             foreach ($this->app->db->all('SELECT folder, COUNT(*) AS n FROM {messages} WHERE mailbox_id = ? AND is_read = 0 GROUP BY folder', [$m['id']]) as $r) {
                 $m['unread'][$r['folder']] = (int) $r['n'];
@@ -271,7 +273,7 @@ final class Mailstore
     // ------------------------------------------------------------------------------------------------- reading
 
     /** A page of a folder (or search results across a mailbox's folders, or all the user's mailboxes). */
-    public function list(int $userId, ?int $mailboxId, string $folder, int $page = 1, string $query = '', bool $starredOnly = false): array
+    public function list(int $userId, ?int $mailboxId, string $folder, int $page = 1, string $query = '', bool $starredOnly = false, string $team = ''): array
     {
         if (!in_array($folder, self::FOLDERS, true) && $folder !== 'all') {
             throw new HttpError(422, 'Unknown folder', 'bad_folder');
@@ -302,6 +304,13 @@ final class Mailstore
             $join = "JOIN (SELECT message_id FROM {search} WHERE token IN ($in) GROUP BY message_id HAVING COUNT(DISTINCT token) = ?) s ON s.message_id = m.id";
             $params = array_merge(array_map(fn ($t) => $this->c()->blindIndex($t, 'search'), $tokens), [count($tokens)], $params);
         }
+        // Shared mailboxes: assigned to me, unassigned, or a status.
+        [$teamJoin, $teamWhere, $teamParams] = Team::listFilter($userId, $team);
+        if ($teamJoin !== '') {
+            $join .= ' ' . $teamJoin;
+            $where = array_merge($where, $teamWhere);
+            $params = array_merge($params, $teamParams);
+        }
         $offset = (max(1, $page) - 1) * self::PAGE;
         $rows = $this->app->db->all(
             "SELECT m.id, m.mailbox_id, m.folder, m.thread_key, m.from_enc, m.to_enc, m.subject_enc, m.snippet_enc, m.sent_at, m.is_read, m.is_starred,
@@ -311,7 +320,9 @@ final class Mailstore
             $params,
         );
         $more = count($rows) > self::PAGE;
-        return ['messages' => array_map(fn ($r) => $this->summary($r), array_slice($rows, 0, self::PAGE)), 'page' => $page, 'has_more' => $more];
+        $rows = array_slice($rows, 0, self::PAGE);
+        $team = (new Team($this->app))->forList(array_map(fn ($r) => ['id' => (int) $r['id'], 'mailbox_id' => (int) $r['mailbox_id'], 'thread_key' => $r['thread_key']], $rows));
+        return ['messages' => array_map(fn ($r) => $this->summary($r) + (isset($team[(int) $r['id']]) ? ['team' => $team[(int) $r['id']]] : []), $rows), 'page' => $page, 'has_more' => $more];
     }
 
     private function summary(array $r): array
@@ -553,6 +564,9 @@ final class Mailstore
         $id = $this->storeOne($mailboxId, $data, 'sent', true);
         if (!empty($in['draft_id'])) {
             $this->delete($user['id'], [(int) $in['draft_id']]);
+        }
+        if (!empty($in['shared_draft_id'])) {
+            (new Team($this->app))->sent($user, (int) $in['shared_draft_id'], $mailboxId);
         }
         $this->remember($user['id'], array_merge($to, $cc, $bcc));
         return ['id' => $id, 'message_id' => $result['message_id'] ?? null, 'suppressed' => $result['suppressed'] ?? []];

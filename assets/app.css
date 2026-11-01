@@ -266,7 +266,7 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
   .reader-bar .icon-btn.on { color: var(--star); }
   .reader-bar .icon-btn svg { width: 21px; height: 21px; }
 }
-@media (min-width: 901px) { .menu-btn { display: none; } }
+@media (min-width: 901px) { .menu-btn, .tabbar { display: none; } }
 .scrim { display: none; }
 
 /* Settings rows, compose signature */
@@ -352,3 +352,51 @@ table.list th { color: var(--muted); font-weight: 600; font-size: 12px; text-tra
 .add-address { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 4px; margin: 18px 0; }
 .add-address legend { padding: 0 6px; font-weight: 600; }
 .add-address .row { margin-bottom: 10px; }
+
+/* ---- shared mailboxes: assignment, notes, writing together ---- */
+.reply-row { flex-wrap: wrap; }
+.team-filter { margin-left: auto; width: auto; padding: 4px 8px; font-size: 13px; }
+.msg .team-line { grid-column: 2 / 4; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.msg .team-line .assignee { display: inline-flex; align-items: center; gap: 3px; }
+.msg .team-line .assignee svg { width: 14px; height: 14px; }
+.msg .team-line .assignee.me { color: var(--accent); font-weight: 600; }
+.status-pill { padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 18px; }
+.status-pill.in_progress { background: var(--warn-soft); color: var(--warn); }
+.status-pill.resolved { background: var(--ok-soft); color: var(--ok); }
+.team-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -4px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); }
+.team-field { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.team-field select { padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); font: inherit; }
+.status-seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); overflow: hidden; }
+.status-seg button { border: 0; background: var(--panel); color: var(--muted); font: inherit; font-size: 13px; padding: 5px 10px; cursor: pointer; }
+.status-seg button + button { border-left: 1px solid var(--line-strong); }
+.status-seg button.on.open { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.status-seg button.on.in_progress { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+.status-seg button.on.resolved { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
+.team-draft { flex-basis: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.team-draft .btn { margin-left: auto; }
+.team-notes { margin: 22px 0 8px; padding: 14px 16px; border: 1px solid #f3dfa2; border-radius: var(--radius); background: #fffbeb; }
+.team-notes h3 svg, .team-field svg, .team-draft svg { width: 18px; height: 18px; flex: none; }
+.team-notes h3 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 10px; font-size: 15px; }
+.team-notes h3 .muted { font-weight: 400; }
+.team-notes .notes { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.team-notes .note { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel); border: 1px solid var(--line); }
+.team-notes .note.to-me { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.team-notes .note-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.team-notes .note-head .avatar { width: 24px; height: 24px; font-size: 10px; }
+.team-notes .note-head time { color: var(--muted); font-size: 12px; }
+.team-notes .note-head .icon-btn { margin-left: auto; width: 28px; height: 28px; }
+.team-notes .note-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.team-notes .mention { color: var(--accent); font-weight: 600; }
+.team-notes .event { font-size: 12.5px; color: var(--muted); padding-left: 4px; }
+.team-notes .event strong { color: var(--text); font-weight: 600; }
+.note-write { position: relative; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.note-write textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); font: inherit; }
+.mentions { position: absolute; z-index: 5; top: 100%; left: 0; margin: 4px 0 0; padding: 4px; list-style: none; min-width: 240px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.mentions li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.mentions li.on, .mentions li:hover { background: var(--accent-soft); }
+.mentions .avatar { width: 24px; height: 24px; font-size: 10px; }
+.mentions small { margin-left: auto; }
+.compose-head .presence { display: inline-flex; align-items: center; gap: 5px; margin-left: 10px; font-size: 12.5px; font-weight: 500; color: var(--accent); }
+.compose-head .presence svg { width: 15px; height: 15px; }
+.shared-note { margin: 0; padding: 0 16px 6px; }
+@media (prefers-color-scheme: dark) { .team-notes { background: #2a2414; border-color: #4a3f1c; } }

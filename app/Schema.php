@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -196,6 +196,61 @@ final class Schema
                     data_enc MEDIUMTEXT NOT NULL,
                     updated_at INT UNSIGNED NOT NULL,
                     KEY session_age (updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Shared mailboxes: who a conversation is assigned to and where it's up to, the team's private notes on it, and
+            // replies written together. A conversation is its mailbox and thread_key (or "m<id>" for a lone message).
+            7 => [
+                "CREATE TABLE IF NOT EXISTS {thread_state} (
+                    mailbox_id INT UNSIGNED NOT NULL,
+                    thread_key VARCHAR(100) NOT NULL,
+                    assignee_id INT UNSIGNED NULL,
+                    status ENUM('open','in_progress','resolved') NOT NULL DEFAULT 'open',
+                    updated_by INT UNSIGNED NULL,
+                    updated_at DATETIME NOT NULL,
+                    PRIMARY KEY (mailbox_id, thread_key),
+                    KEY assignee (assignee_id),
+                    FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (assignee_id) REFERENCES {users}(id) ON DELETE SET NULL,
+                    FOREIGN KEY (updated_by) REFERENCES {users}(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {thread_notes} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    mailbox_id INT UNSIGNED NOT NULL,
+                    thread_key VARCHAR(100) NOT NULL,
+                    user_id INT UNSIGNED NULL,
+                    kind ENUM('note','event') NOT NULL DEFAULT 'note',
+                    body_enc TEXT NOT NULL,
+                    mentions VARCHAR(255) NULL,
+                    created_at DATETIME NOT NULL,
+                    KEY conversation (mailbox_id, thread_key, id),
+                    FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {shared_drafts} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    mailbox_id INT UNSIGNED NOT NULL,
+                    thread_key VARCHAR(100) NOT NULL,
+                    reply_to_id INT UNSIGNED NULL,
+                    fields_enc MEDIUMTEXT NOT NULL,
+                    version INT UNSIGNED NOT NULL DEFAULT 1,
+                    created_by INT UNSIGNED NULL,
+                    updated_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    UNIQUE KEY conversation (mailbox_id, thread_key),
+                    FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (created_by) REFERENCES {users}(id) ON DELETE SET NULL,
+                    FOREIGN KEY (updated_by) REFERENCES {users}(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {draft_presence} (
+                    draft_id INT UNSIGNED NOT NULL,
+                    user_id INT UNSIGNED NOT NULL,
+                    seen_at INT UNSIGNED NOT NULL,
+                    typing_at INT UNSIGNED NOT NULL DEFAULT 0,
+                    PRIMARY KEY (draft_id, user_id),
+                    FOREIGN KEY (draft_id) REFERENCES {shared_drafts}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];
