@@ -1193,7 +1193,8 @@ async function compose(opts = {}) {
     // Drafts from before 1.5.0 have the signature in their text already.
     if (/\n-- \n/.test(full?.message.text || "")) sigOn.checked = false;
   } else {
-    editor.append(h("div", {}, h("br")));
+    // opts.text: a reply typed in a notification that couldn't be sent from there.
+    editor.append(...(opts.text ? opts.text.split("\n").map((l) => h("div", {}, l || h("br"))) : [h("div", {}, h("br"))]));
     if (quoted) editor.append(h("br"), quoted);
   }
   swapSignature();
@@ -1614,6 +1615,12 @@ async function templatePicker(anchor, range, insert) {
   const menu = popMenu(anchor, [search, box, null, { label: "Manage templates…", icon: "settings", run: () => openSettings("templates") }], { className: "template-menu" });
   render();
   search.focus();
+}
+
+/** Reply to an email from outside the app (a notification's Reply button): open it, then a reply window, with any text already typed. */
+async function replyTo(id, text = "") {
+  await openMessage(id);
+  if (current?.message.id === id) compose({ mode: "reply", of: last(), text });
 }
 
 async function openDraft(m) {
@@ -2524,5 +2531,5 @@ document.addEventListener("keydown", (e) => {
 setInterval(() => { if ($shell && document.visibilityState === "visible" && !document.querySelector(".overlay:not([hidden])")) refresh(); }, 30000);
 document.addEventListener("visibilitychange", () => { if ($shell && document.visibilityState === "visible") refresh(); });
 
-window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder };
+window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo };
 start();

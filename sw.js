@@ -3,12 +3,12 @@
 "use strict";
 
 // Drafts kept on the device, finished saving here in the background (Background Sync).
-importScripts("assets/drafts.js?v=1.10.0");
+importScripts("assets/drafts.js?v=1.11.0");
 
-const VERSION = "wm-1.10.0";
+const VERSION = "wm-1.11.0";
 const SHELL = `${VERSION}-shell`;
 const MAIL = `${VERSION}-mail`;
-const SHELL_FILES = ["./", "assets/app.css?v=1.10.0", "assets/app.js?v=1.10.0", "assets/pwa.js?v=1.10.0", "assets/drafts.js?v=1.10.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
+const SHELL_FILES = ["./", "assets/app.css?v=1.11.0", "assets/app.js?v=1.11.0", "assets/pwa.js?v=1.11.0", "assets/drafts.js?v=1.11.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
 // API reads worth keeping for offline: the session, the lists and the messages you open.
 const OFFLINE_READS = new Set(["session", "messages", "message", "body", "contacts", "book"]);
 
@@ -84,25 +84,86 @@ function setBadge(n) {
   return (n > 0 ? self.navigator.setAppBadge(n) : self.navigator.clearAppBadge()).catch(() => {});
 }
 
+/**
+ * New-mail notifications have buttons that work without opening the app: Mark as read, Reply (typed right in the
+ * notification where the system offers that: Chrome and Edge on Windows, Mac, Linux and Android) and, where there's room
+ * for a third, Archive. Elsewhere Reply opens the reply window. iPhone and iPad don't show notification buttons yet:
+ * there, tapping the notification opens the email as before.
+ */
+function mailActions() {
+  const max = self.Notification?.maxActions ?? 2;
+  const actions = [{ action: "read", title: "Mark as read" }, { action: "reply", title: "Reply", type: "text", placeholder: "Write a reply…" }];
+  if (max >= 3) actions.push({ action: "archive", title: "Archive" });
+  return actions.slice(0, Math.max(0, max));
+}
+
 self.addEventListener("push", (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = { title: "New email" }; }
+  const mail = !!(data.token && data.message_id);
   event.waitUntil(Promise.all([setBadge(data.unread), self.registration.showNotification(data.title || "New email", {
     body: data.body || "",
     tag: data.tag || undefined,
     icon: "assets/icons/icon-192.png",
     badge: "assets/icons/badge-96.png",
-    data: { url: data.url || "./" },
+    actions: mail ? mailActions() : [],
+    data: { url: data.url || "./", message_id: mail ? data.message_id : null, token: mail ? data.token : null },
   })]));
 });
 
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
-  const target = new URL(event.notification.data?.url || "./", self.registration.scope).href;
-  event.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) => {
+/** Open the webmail at a page (#m=…, #reply=…), in a window that's open already if there is one. */
+function openApp(url) {
+  const target = new URL(url || "./", self.registration.scope).href;
+  return self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) => {
     for (const w of wins) {
       if (w.url.startsWith(self.registration.scope)) { w.postMessage({ open: target }); return w.focus(); }
     }
     return self.clients.openWindow(target);
-  }));
+  });
+}
+
+/** A notification button, done on the server with the notification's own token. Returns the answer, or throws. */
+async function notificationAction(data, action, text) {
+  const res = await fetch(new URL("api.php?a=push/action", self.registration.scope).href, {
+    method: "POST", credentials: "omit", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: data.token, action, text }),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(out.message || `Error ${res.status}`), { status: res.status });
+  return out;
+}
+
+/** A short note in place of the notification ("Reply sent"), gone after a few seconds where the system allows. */
+async function note(tag, title, body, url) {
+  await self.registration.showNotification(title, { body, tag, icon: "assets/icons/icon-192.png", badge: "assets/icons/badge-96.png", silent: true, data: { url } });
+  if (!url) {
+    await new Promise((r) => setTimeout(r, 4000));
+    (await self.registration.getNotifications({ tag })).forEach((n) => n.close());
+  }
+}
+
+self.addEventListener("notificationclick", (event) => {
+  const n = event.notification;
+  const data = n.data || {};
+  n.close();
+  const id = data.message_id;
+  if (!event.action || !id || !data.token) { event.waitUntil(openApp(data.url)); return; }
+  const reply = typeof event.reply === "string" ? event.reply.trim() : "";
+  // Reply where the notification has no box to type in: the reply window, ready to write.
+  if (event.action === "reply" && !reply) { event.waitUntil(openApp(`./#reply=${id}`)); return; }
+  event.waitUntil((async () => {
+    try {
+      const out = await notificationAction(data, event.action, reply);
+      await setBadge(out.unread);
+      if (event.action === "reply") await note(n.tag || `m${id}`, "Reply sent", reply.slice(0, 120));
+    } catch (err) {
+      // Too old, signed out, or no connection: the webmail does it instead (a typed reply is kept, ready to send).
+      if (event.action === "reply") {
+        const why = err.status ? err.message : "No connection";
+        await note(n.tag || `m${id}`, "Reply not sent", `${why}. Tap to send it from the webmail: what you wrote is kept.`, `./#reply=${id}&text=${encodeURIComponent(reply)}`);
+      } else {
+        await openApp(`./#m=${id}`);
+      }
+    }
+  })());
 });

@@ -3,6 +3,10 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.11.0
+- **Buttons on new-mail notifications**: Mark as read and Reply (and Archive, where your device has room for a third), straight from the notification, without opening the webmail. On Chrome and Edge you type the reply in the notification itself; elsewhere Reply opens the reply window. If a reply can't be sent from the notification, you're told, and tapping opens it with what you wrote. (iPhone and iPad don't show notification buttons: tapping opens the email, as before.)
+- Tapping a notification while the webmail is already open now shows that email there.
+
 ## 1.10.0
 - **Templates**: replies you write often, with formatting and placeholders such as {first_name}, {company} and {ticket_id}, filled in from the email you're writing. Type / and a template's shortcut while writing (/refund), press Ctrl+/ (⌘/ on a Mac), or use the Templates button. Your own under Settings → Templates, and shared ones administrators keep for everyone. A placeholder that can't be filled in is pointed out before the email goes.
 - **Undo send**: after Send, the email waits 10 seconds with Undo, to take it back and change it. Choose 5, 20 or 30 seconds, or none, under Settings → Account.

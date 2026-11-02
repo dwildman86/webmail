@@ -69,6 +69,14 @@ try {
         Http::json(['ok' => true]);
     }
 
+    // A notification's button (Mark as read, Archive, Reply), from the service worker: the notification's own token is
+    // what allows it, not a session (the browser may not have one any more). No cookie is used, so no CSRF token either.
+    if ($action === 'push/action' && $method === 'POST') {
+        session_write_close();
+        $in = Http::body();
+        Http::json((new \Webmail\Notifier($app))->act((string) ($in['token'] ?? ''), (string) ($in['action'] ?? ''), (string) ($in['text'] ?? '')));
+    }
+
     // The second step, for a session that has only done its password.
     $pending = $auth->user() ? null : $auth->pending();
     if ($pending && ($action === 'mfa/verify' || str_starts_with($action, 'mfa/setup') || str_starts_with($action, 'passkey/register'))) {

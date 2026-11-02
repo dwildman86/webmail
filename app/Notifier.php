@@ -11,6 +11,11 @@ namespace Webmail;
  */
 final class Notifier
 {
+    /** How long a notification's buttons (Mark as read, Archive, Reply) keep working. */
+    public const ACTION_TTL = 7 * 86400;
+    public const ACTIONS = ['read', 'archive', 'reply'];
+    public const MAX_REPLY = 10000;
+
     /** (string $url, array $headers, string $body): int status. Swapped in tests; cURL otherwise. */
     public ?\Closure $transport = null;
 
@@ -96,10 +101,95 @@ final class Notifier
             $payload = ['title' => mb_substr($sender, 0, 80), 'body' => mb_substr((string) (($data['subject'] ?? '') ?: '(no subject)'), 0, 140),
                 'tag' => 'm' . $s['id'], 'url' => './#m=' . $s['id']];
             foreach ($db->all('SELECT user_id FROM {user_mailboxes} WHERE mailbox_id = ?', [$s['mailbox_id']]) as $row) {
-                // With their unread count, for the badge on the app's icon.
-                $this->notifyUser((int) $row['user_id'], $payload + ['unread' => $this->unreadFor((int) $row['user_id'])]);
+                $this->notifyUser((int) $row['user_id'], $this->mailPayload((int) $row['user_id'], (int) $s['id'], $payload));
             }
         }
+    }
+
+    /**
+     * A new-mail notification for one person: with their unread count (for the badge on the app's icon), and what its
+     * buttons need to work without opening the app (Mark as read, Archive, Reply): the email and a token for it.
+     */
+    public function mailPayload(int $userId, int $messageId, array $payload): array
+    {
+        return $payload + ['unread' => $this->unreadFor($userId), 'message_id' => $messageId, 'token' => $this->actionToken($userId, $messageId)];
+    }
+
+    // ---------------------------------------------------------------------------------------------- notification buttons
+
+    /**
+     * What lets a notification's buttons act on one email for one person, without a signed-in session (the browser
+     * may have none: the notification can come long after the webmail was last open). It's only ever inside the
+     * encrypted push message. Signed with the webmail's key; it names the person and the email, stops working after
+     * ACTION_TTL, and as soon as the person is signed out everywhere (a password change, a two-step reset).
+     */
+    public function actionToken(int $userId, int $messageId, ?int $now = null): string
+    {
+        $version = (int) $this->app->db->value('SELECT session_version FROM {users} WHERE id = ?', [$userId]);
+        $claims = self::b64u(json_encode(['u' => $userId, 'm' => $messageId, 'v' => $version, 'e' => ($now ?? time()) + self::ACTION_TTL]));
+        return $claims . '.' . self::b64u($this->app->crypto->blindIndex($claims, 'push.action'));
+    }
+
+    /** The person and email a token is for, if it's genuine and still good. */
+    private function checkToken(string $token, ?int $now = null): array
+    {
+        [$claims, $mac] = explode('.', $token, 2) + ['', ''];
+        if ($claims === '' || !hash_equals(self::b64u($this->app->crypto->blindIndex($claims, 'push.action')), $mac)) {
+            throw new HttpError(403, 'This notification can\'t do that', 'bad_token');
+        }
+        $c = json_decode(self::unb64u($claims), true);
+        if (!is_array($c) || (int) ($c['e'] ?? 0) < ($now ?? time())) {
+            throw new HttpError(403, 'This notification is too old', 'expired');
+        }
+        $row = $this->app->db->one('SELECT id, email_enc, name_enc, role, disabled, session_version FROM {users} WHERE id = ?', [(int) ($c['u'] ?? 0)]);
+        if (!$row || $row['disabled'] || (int) $row['session_version'] !== (int) ($c['v'] ?? -1)) {
+            throw new HttpError(403, 'You\'ve been signed out', 'signed_out');
+        }
+        $crypto = $this->app->crypto;
+        return [['id' => (int) $row['id'], 'email' => $crypto->decrypt($row['email_enc'], 'users.email'), 'name' => $crypto->decrypt($row['name_enc'], 'users.name') ?? '',
+            'role' => $row['role']], (int) ($c['m'] ?? 0)];
+    }
+
+    /**
+     * A notification's button: "read" marks the conversation read, "archive" moves it out of the Inbox, "reply" sends
+     * $text as a reply (from the mailbox it came to, threaded like any reply). Only email the person can still read.
+     * Returns their unread count, for the badge.
+     */
+    public function act(string $token, string $action, string $text = '', ?int $now = null): array
+    {
+        if (!in_array($action, self::ACTIONS, true)) {
+            throw new HttpError(422, 'Unknown action', 'bad_action');
+        }
+        [$user, $messageId] = $this->checkToken($token, $now);
+        $store = new Mailstore($this->app);
+        $out = ['ok' => true];
+        if ($action === 'reply') {
+            $text = trim(str_replace("\r\n", "\n", $text));
+            if ($text === '') {
+                throw new HttpError(422, 'Write a reply first', 'empty');
+            }
+            if (mb_strlen($text) > self::MAX_REPLY) {
+                throw new HttpError(422, 'That reply is too long for a notification: open the webmail to send it', 'too_long');
+            }
+        }
+        $orig = $store->get($user['id'], $messageId, true)['message']; // 404 if they can't read it any more; marks it read
+        if ($action === 'archive') {
+            $ids = array_map('intval', array_column($this->app->db->all('SELECT id FROM {messages} WHERE mailbox_id = ? AND folder = ? AND (id = ? OR (thread_key IS NOT NULL AND thread_key = ?))',
+                [$orig['mailbox_id'], $orig['folder'], $messageId, (string) $orig['thread_key']]), 'id'));
+            if ($orig['folder'] === 'inbox') {
+                $store->update($user['id'], $ids, ['folder' => 'archive']);
+            }
+        } elseif ($action === 'reply') {
+            $to = array_values(array_filter(array_map(fn ($p) => $p['address'] ?? '', $orig['reply_to'] ?: [$orig['from']])));
+            if (!$to) {
+                throw new HttpError(422, 'There\'s no address to reply to', 'no_recipients');
+            }
+            $subject = (string) $orig['subject'];
+            $sent = $store->send($user, (int) $orig['mailbox_id'], ['to' => $to, 'subject' => preg_match('/^re:/i', $subject) ? $subject : "Re: $subject", 'text' => $text,
+                'html' => '<div>' . nl2br(htmlspecialchars($text, ENT_QUOTES | ENT_HTML5, 'UTF-8')) . '</div>', 'reply_to_id' => $messageId]);
+            $out['sent'] = $sent['id'];
+        }
+        return $out + ['unread' => $this->unreadFor($user['id'])];
     }
 
     /** Unread email in the inbox of every mailbox the user can read. */

@@ -30,7 +30,7 @@ final class Due
                     $payload = ['title' => 'Back from snooze: ' . mb_substr((string) (($from['name'] ?? '') ?: ($from['address'] ?? 'an email')), 0, 60),
                         'body' => mb_substr((string) (($m['subject'] ?? '') ?: '(no subject)'), 0, 140), 'tag' => 'm' . $w['id'], 'url' => './#m=' . $w['id']];
                     foreach ($app->db->all('SELECT user_id FROM {user_mailboxes} WHERE mailbox_id = ?', [$w['mailbox_id']]) as $row) {
-                        $notifier->notifyUser((int) $row['user_id'], $payload + ['unread' => $notifier->unreadFor((int) $row['user_id'])]);
+                        $notifier->notifyUser((int) $row['user_id'], $notifier->mailPayload((int) $row['user_id'], $w['id'], $payload));
                     }
                 }
             };

@@ -10,7 +10,13 @@ const b64u = {
 if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
   navigator.serviceWorker.register("sw.js").catch(() => { /* the app works without it */ });
   navigator.serviceWorker.addEventListener("message", (e) => {
-    if (e.data?.open) location.href = e.data.open;
+    if (!e.data?.open) return;
+    // A link from a notification to this page (#m=…, #reply=…): followed without reloading, once signed in.
+    const url = new URL(e.data.open);
+    if (url.origin === location.origin && url.pathname === location.pathname && window.Webmail?.state?.user) {
+      history.replaceState(null, "", url.pathname + url.hash);
+      window.Notifications?.followHash?.();
+    } else location.href = e.data.open;
   });
 }
 
@@ -145,16 +151,29 @@ window.Passkeys = {
 
 // ------------------------------------------------------------------------------------------------ notifications
 let vapidKey = null;
+// A notification link followed while the webmail is open (only the # part changes, so the page doesn't reload).
+addEventListener("hashchange", () => { if (window.Webmail?.state?.user) window.Notifications?.followHash?.(); });
 window.Notifications = {
   available: () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && window.isSecureContext,
 
   afterSignIn(session) {
     vapidKey = session.app?.vapid_public_key || null;
-    // Opened from a notification: show that message.
-    const m = /^#m=(\d+)$/.exec(location.hash);
-    if (m) { history.replaceState(null, "", location.pathname); window.Webmail.openMessage(Number(m[1])); }
-    if (location.hash === "#compose") { history.replaceState(null, "", location.pathname); document.querySelector(".compose-btn")?.click(); }
-    if (location.hash === "#scheduled") { history.replaceState(null, "", location.pathname); window.Webmail.openFolder("scheduled"); }
+    this.followHash();
+  },
+
+  /**
+   * Opened from a notification: #m=<id> shows that email, #reply=<id> opens a reply to it (with &text=… a reply typed
+   * in the notification that couldn't be sent from there), #compose a new email, #scheduled the Scheduled folder.
+   */
+  followHash() {
+    const hash = location.hash;
+    if (!/^#(m=|reply=|compose$|scheduled$)/.test(hash)) return;
+    history.replaceState(null, "", location.pathname);
+    const p = new URLSearchParams(hash.slice(1));
+    if (p.has("m")) window.Webmail.openMessage(Number(p.get("m")));
+    else if (p.has("reply")) window.Webmail.replyTo(Number(p.get("reply")), p.get("text") || "");
+    else if (hash === "#compose") document.querySelector(".compose-btn")?.click();
+    else if (hash === "#scheduled") window.Webmail.openFolder("scheduled");
   },
 
   async subscription() {
