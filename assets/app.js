@@ -1896,7 +1896,7 @@ async function openSettings(tab = "account") {
   document.querySelector(".overlay.settings-overlay")?.remove();
   const body = h("div", { class: "tab-body" });
   const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["templates", "Templates"], ["rules", "Rules & labels"], ["import", "Import email"], ["security", "Sign-in & alerts"],
-    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-mailboxes", "Connect addresses"], ["admin-status", "Status"]] : [])];
+    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
     nav.replaceChildren(...tabs.map(([k, label]) => h("button", { class: k === key ? "on" : "", "aria-current": k === key ? "page" : null, onclick: () => show(k) }, label)));
@@ -2498,6 +2498,66 @@ const SETTINGS = {
           const made = await api("admin/addresses", { method: "POST", body: v });
           toast(`${made.address} delivers here now.`); await refreshCounts(); renderShell(); loadList(); openSettings("admin-mailboxes");
         })) : null);
+  },
+  /** GDPR data requests: find and export everything about one person, here or from another system with a key. */
+  async "admin-data-requests"() {
+    const { data_requests: requests, keys } = await api("admin/data-requests");
+    const again = () => openSettings("admin-data-requests");
+    const when = (iso) => iso ? new Date(iso).toLocaleString() : "";
+    const status = (r) => r.status === "searching" ? h("span", { class: "pill" }, `searching ${r.progress.total ? Math.floor(100 * r.progress.scanned / r.progress.total) : 0}%`)
+      : r.status === "ready" ? h("span", { class: "pill" }, `${r.matches} email${r.matches === 1 ? "" : "s"}`) : h("span", { class: "pill", title: "The results have been removed; the record stays" }, "results removed");
+    const actions = (r) => h("td", {},
+      r.status === "searching" && h("button", { class: "btn btn-sm", onclick: async (e) => { e.target.disabled = true; await api("admin/data-requests/one", { query: { id: r.id } }).catch((err) => toast(err.message)); again(); } }, "Carry on"),
+      r.status === "ready" && h("a", { class: "btn btn-sm", href: `api.php?${new URLSearchParams({ a: "admin/data-requests/export", id: r.id })}`, download: "" }, "Download ZIP"),
+      r.status === "ready" && h("button", { class: "btn btn-sm", onclick: async () => {
+        if (!confirm("Remove these results now? The record of the request stays.")) return;
+        await api("admin/data-requests/discard", { method: "POST", body: { id: r.id } }); again();
+      } }, "Remove results"));
+    const list = requests.length ? h("table", { class: "list" }, h("tr", {}, h("th", {}, "Person"), h("th", {}, "Asked"), h("th", {}, "Found"), h("th", {}, "")),
+      requests.map((r) => h("tr", {},
+        h("td", {}, r.email, r.terms.length ? h("div", { class: "muted small" }, `and ${r.terms.map((t) => `“${t}”`).join(", ")}`) : null, r.reference && h("div", { class: "muted small" }, `Ref: ${r.reference}`)),
+        h("td", {}, when(r.created_at), h("div", { class: "muted small" }, r.requested_by.key ? `API key: ${r.requested_by.key}` : r.requested_by.user || ""),
+          r.downloads ? h("div", { class: "muted small" }, `Downloaded ${when(r.last_downloaded_at)}`) : null),
+        h("td", {}, status(r)), actions(r))))
+      : h("p", { class: "muted" }, "No requests yet.");
+    const newKey = h("div");
+    const keyList = keys.length ? h("table", { class: "list" }, h("tr", {}, h("th", {}, "Key"), h("th", {}, "Last used"), h("th", {}, "")),
+      keys.map((k) => h("tr", {}, h("td", {}, k.name, h("div", { class: "muted small" }, k.hint, k.allowed_ips.length ? ` · only from ${k.allowed_ips.join(", ")}` : "")),
+        h("td", {}, k.last_used_at ? when(k.last_used_at) : h("span", { class: "muted" }, "never")),
+        h("td", {}, h("button", { class: "btn btn-sm btn-danger", onclick: async () => {
+          if (!confirm(`Revoke "${k.name}"? Anything using it stops working.`)) return;
+          await api("admin/data-requests/keys/revoke", { method: "POST", body: { id: k.id } }); again();
+        } }, "Revoke")))))
+      : h("p", { class: "muted" }, "No keys yet.");
+    const endpoint = new URL("api.php", location.href).href;
+    return h("div", {},
+      h("section", {}, h("h3", {}, "Find everything about one person"),
+        h("p", { class: "muted" }, "For a GDPR subject access request. Every mailbox and folder is searched (Trash, Spam and Drafts too): email the address sent or received, and email that mentions the address or the other terms. The ZIP has each email with its attachments, a spreadsheet of them, the person's address book entries and your team's notes on those conversations. Check it before sending: the emails may hold other people's personal data."),
+        formFor([h("label", { class: "field" }, "Their email address", h("input", { type: "email", name: "email", required: true, autocomplete: "off" })),
+          h("label", { class: "field" }, "Also look for (optional, one per line: their name, phone number, customer number)", h("textarea", { name: "terms", rows: 3 })),
+          h("label", { class: "field" }, "Your reference (optional)", h("input", { name: "reference", maxlength: 200, placeholder: "e.g. the ticket number" })),
+          h("label", { class: "check" }, h("input", { type: "checkbox", name: "include_attachments", checked: true }), "Include attachments")],
+        "Search", async (v) => {
+          const r = await api("admin/data-requests", { method: "POST", body: { email: v.email, reference: v.reference || undefined,
+            terms: (v.terms || "").split("\n").map((t) => t.trim()).filter(Boolean), include_attachments: v.include_attachments === "on" } });
+          toast(r.status === "ready" ? `Found ${r.matches} email${r.matches === 1 ? "" : "s"}.` : "Searching: a big mailbox takes a few steps. Press Carry on to continue.");
+          again();
+        })),
+      h("section", {}, h("h3", {}, "Requests"), list,
+        h("p", { class: "muted small" }, "Results are kept for 30 days, then removed. The record of each request stays.")),
+      h("section", {}, h("h3", {}, "From another system"),
+        h("p", { class: "muted" }, "Your CRM, help desk or website can start a request itself (a “GDPR request” button) and download the ZIP, with a key made here. ",
+          "POST ", h("code", {}, `${endpoint}?a=data-requests`), " with ", h("code", {}, `{"email": "…"}`), " and the header ", h("code", {}, "Authorization: Bearer wmk_…"), ". The README has the details."),
+        keyList, newKey,
+        formFor([h("div", { class: "row" },
+            h("label", { class: "field grow" }, "Name (the system that will use it)", h("input", { name: "name", required: true, maxlength: 100, placeholder: "e.g. Our CRM" })),
+            h("label", { class: "field grow" }, "Only from these IP addresses (optional)", h("input", { name: "ips", placeholder: "203.0.113.10, 2001:db8::1" }))),
+          h("label", { class: "field" }, "Your password", h("input", { type: "password", name: "password", required: true, autocomplete: "current-password" }))],
+        "Make a key", async (v) => {
+          const k = await api("admin/data-requests/keys", { method: "POST", body: { name: v.name, password: v.password, allowed_ips: (v.ips || "").split(/[\s,]+/).filter(Boolean) } });
+          newKey.replaceChildren(h("div", { class: "notice ok" }, h("p", {}, h("strong", {}, "Copy this key now: it isn't shown again.")), h("p", {}, h("code", { class: "secret" }, k.key)),
+            h("button", { type: "button", class: "btn btn-sm", onclick: async () => { try { await navigator.clipboard.writeText(k.key); toast("Copied."); } catch { toast("Select the key and copy it."); } } }, "Copy")));
+        })));
   },
   async "admin-status"() {
     const [s, update] = await Promise.all([api("admin/status"), updateSection()]);

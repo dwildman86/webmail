@@ -392,7 +392,8 @@ final class Mailstore
         return ['message' => $this->full($row), 'thread' => array_map(fn ($r) => (int) $r['id'] === $messageId ? $this->full($row) : $this->full($r), $thread)];
     }
 
-    private function full(array $r): array
+    /** Everything about one message (a {messages} row): what the reader shows, and what a data request exports. */
+    public function full(array $r): array
     {
         $c = $this->c();
         $out = $this->summary($r);

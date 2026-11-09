@@ -77,6 +77,12 @@ try {
         Http::json((new \Webmail\Notifier($app))->act((string) ($in['token'] ?? ''), (string) ($in['action'] ?? ''), (string) ($in['text'] ?? '')));
     }
 
+    // Data requests (GDPR) from another system, with an API key made under Settings → Data requests. No session.
+    if ($action === 'data-requests' || str_starts_with($action, 'data-requests/')) {
+        session_write_close();
+        (new \Webmail\DataRequests($app))->routeApi($action, $method);
+    }
+
     // The second step, for a session that has only done its password.
     $pending = $auth->user() ? null : $auth->pending();
     if ($pending && ($action === 'mfa/verify' || str_starts_with($action, 'mfa/setup') || str_starts_with($action, 'passkey/register'))) {
@@ -322,6 +328,9 @@ try {
     }
     if (str_starts_with($action, 'admin/')) {
         $auth->requireAdmin();
+        if ($action === 'admin/data-requests' || str_starts_with($action, 'admin/data-requests/')) {
+            (new \Webmail\DataRequests($app))->routeAdmin($action, $method, $user);
+        }
         (new Admin($app))->route($action, $method, $user);
     }
     if (class_exists(\Webmail\Passkeys::class) && str_starts_with($action, 'passkey/')) {

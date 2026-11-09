@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -319,6 +319,51 @@ final class Schema
                     KEY mailbox_rules (mailbox_id, position),
                     FOREIGN KEY (mailbox_id) REFERENCES {mailboxes}(id) ON DELETE CASCADE,
                     FOREIGN KEY (created_by) REFERENCES {users}(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Data requests (GDPR subject access requests): keys for the systems that make them, and each request with
+            // its results (removed after 30 days; the record stays). See DataRequests.
+            9 => [
+                "CREATE TABLE IF NOT EXISTS {api_keys} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    name_enc TEXT NOT NULL,
+                    token_bidx BINARY(16) NOT NULL UNIQUE,
+                    hint VARCHAR(32) NOT NULL,
+                    allowed_ips_enc TEXT NULL,
+                    scopes VARCHAR(100) NOT NULL,
+                    created_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    last_used_at DATETIME NULL,
+                    revoked_at DATETIME NULL,
+                    FOREIGN KEY (created_by) REFERENCES {users}(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {data_requests} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    public_id VARCHAR(32) NOT NULL UNIQUE,
+                    key_id INT UNSIGNED NULL,
+                    user_id INT UNSIGNED NULL,
+                    subject_bidx BINARY(16) NOT NULL,
+                    subject_enc TEXT NOT NULL,
+                    terms_enc TEXT NOT NULL,
+                    reference_enc TEXT NULL,
+                    mailbox_ids VARCHAR(2000) NULL,
+                    since DATETIME NULL,
+                    until DATETIME NULL,
+                    include_attachments TINYINT(1) NOT NULL DEFAULT 1,
+                    status ENUM('searching','ready','expired') NOT NULL,
+                    cursor_id INT UNSIGNED NOT NULL DEFAULT 0,
+                    scanned INT UNSIGNED NOT NULL DEFAULT 0,
+                    total INT UNSIGNED NOT NULL DEFAULT 0,
+                    matches_enc MEDIUMTEXT NULL,
+                    created_at DATETIME NOT NULL,
+                    completed_at DATETIME NULL,
+                    expires_at DATETIME NOT NULL,
+                    downloads INT UNSIGNED NOT NULL DEFAULT 0,
+                    last_download_at DATETIME NULL,
+                    KEY key_status (key_id, status),
+                    KEY subject (subject_bidx),
+                    FOREIGN KEY (key_id) REFERENCES {api_keys}(id) ON DELETE SET NULL,
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE SET NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

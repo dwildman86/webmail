@@ -138,6 +138,80 @@ part-way is never sent twice: it's marked *not sent*, to check in Sent first.
 - **Swipe on your phone**: swipe an email right to delete it, or left to archive it, with Undo.
 - **Offline**: the app opens without a connection and shows the mail you've already opened on that device. Signing out clears it.
 
+## Data requests (GDPR)
+
+When someone asks for the personal data you hold about them (a subject access request), the webmail finds every
+email about them and exports it as one ZIP file.
+
+**What it searches.** Every mailbox (or the ones you name) and every folder, Drafts, Spam and Trash included. An email
+is found when the person's address is its sender or a recipient (To, Cc, Bcc, Reply-To), or when the address or one of
+your extra terms (their name, a phone number, a customer number) is in its subject, its text or an attachment's name.
+The search index finds most matches at once. Then every message is decrypted and checked, so text past the index's reach isn't missed: the end of a long
+email, a quoted reply. Attachment contents (PDFs, images) aren't searched, but a matching email's attachments are
+exported with it.
+
+**What the ZIP holds.** `README.txt` (what was searched, and when), `messages.csv` (one row per email: date, mailbox,
+folder, people, subject and where the person was found), each email as `message.txt` and `message.html` with its
+attachments, `contacts.json` (their address book entries, and who has emailed them) and `team-notes.json` (your team's
+notes on those conversations). The emails may hold other people's personal data, so check the export and redact it
+before you send it (GDPR article 15(4)).
+
+**Keeping it.** Results are kept for 30 days, or until they're removed, then deleted. The record of the request stays
+(who asked, when, how many emails, when it was downloaded) as evidence that it was answered.
+
+**By hand.** Administrators: **Settings → Data requests**, then enter the address and press **Search**. Then press
+**Download ZIP**.
+
+### From another system: a "GDPR request" button
+
+Your CRM, help desk or website can do the same with an API key. Make one under **Settings → Data requests → From
+another system**. You can limit it to your system's IP addresses. The key is shown once; only a keyed hash of it is
+stored. Send it as `Authorization: Bearer wmk_…`. Where the hosting drops that header, use `X-Api-Key: wmk_…`.
+
+| Call | What it does |
+|---|---|
+| `POST api.php?a=data-requests` | Start a request. JSON: `email` (required), `terms` (array, optional), `mailboxes` (array of addresses; all by default), `since` / `until` (dates), `reference` (yours, such as a ticket number), `include_attachments` (default `true`). Answers `201` with the request. |
+| `GET api.php?a=data-requests&id=dr_…` | The request: `status` is `searching`, `ready` or `expired`. While it's `searching`, each call carries on with the search for up to 20 seconds and reports `progress` (`scanned` of `total`). When it's `ready`, it lists the matching emails. |
+| `GET api.php?a=data-requests/export&id=dr_…` | The ZIP file. `409` while it's still searching, `410` once the results have been removed. |
+| `POST api.php?a=data-requests/discard&id=dr_…` | Remove the results now (the request has been answered). The record stays. |
+| `GET api.php?a=data-requests` | This key's recent requests. |
+
+A key sees only the requests it made. Each key can have up to 5 searches running at once.
+
+```php
+<?php
+// "GDPR request" button: start the search, wait for it, save the ZIP.
+$base = 'https://example.com/mail/api.php';
+$key  = getenv('WEBMAIL_DATA_REQUEST_KEY'); // wmk_…
+function call(string $url, string $key, ?array $body = null): array {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 120,
+        CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $key, 'Content-Type: application/json']]);
+    if ($body !== null) {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body)); // a POST
+    }
+    $res = curl_exec($ch);
+    return [curl_getinfo($ch, CURLINFO_HTTP_CODE), $res];
+}
+[, $res] = call("$base?a=data-requests", $key, ['email' => $customer->email, 'terms' => [$customer->name, $customer->phone], 'reference' => "DSAR-{$ticket->id}"]);
+$request = json_decode($res, true);
+while ($request['status'] === 'searching') {
+    [, $res] = call("$base?a=data-requests&id={$request['id']}", $key);
+    $request = json_decode($res, true);
+}
+[$status, $zip] = call("$base?a=data-requests/export&id={$request['id']}", $key);
+file_put_contents("dsar-{$ticket->id}.zip", $zip); // review it, then send it to the customer
+```
+
+With curl:
+
+```sh
+curl -s -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"email":"jane@example.com","terms":["Jane Doe"],"reference":"DSAR-42"}' 'https://example.com/mail/api.php?a=data-requests'
+curl -s -H "Authorization: Bearer $KEY" 'https://example.com/mail/api.php?a=data-requests&id=dr_…'          # until "ready"
+curl -s -H "Authorization: Bearer $KEY" -o dsar-42.zip 'https://example.com/mail/api.php?a=data-requests/export&id=dr_…'
+```
+
 ## Security
 
 - **Encrypted at rest.** Senders, recipients, subjects, message bodies, attachments, names, email addresses, contacts and address books, push subscriptions and passkeys are encrypted in the database with XChaCha20-Poly1305 (libsodium). Each value is bound to its column, so values can't be swapped between columns. Someone with a copy of the database sees only ciphertext.

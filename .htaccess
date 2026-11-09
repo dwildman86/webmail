@@ -2,6 +2,9 @@
 Options -Indexes
 <IfModule mod_rewrite.c>
   RewriteEngine On
+  # Some hosts (PHP as CGI/FastCGI) drop the Authorization header: pass it on, for data request API keys.
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
   RewriteRule ^(app|storage|tests|vendor)(/|$) - [F,L]
   RewriteRule ^(config\.php|config\.php\.tmp|setup-preset\.php|install-cli\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ - [F,L]
 </IfModule>

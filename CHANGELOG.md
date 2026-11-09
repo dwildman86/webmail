@@ -3,6 +3,10 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.12.0
+- **Data requests (GDPR)**: find and export everything about one person for a subject access request. Every mailbox and folder is searched, Trash and Spam too: email they sent or received, and email that mentions their address or other terms you give (name, phone, customer number). Every message is checked, not just the search index. The ZIP has each email with its attachments, a spreadsheet of them, their address book entries and your team's notes on those conversations. Administrators: Settings → Data requests. Results are kept for 30 days; the record of each request stays.
+- **For your CRM or help desk**: a "GDPR request" button can start the search and download the ZIP itself, with an API key made under Settings → Data requests (it can be limited to your system's IP addresses). See the README.
+
 ## 1.11.0
 - **Buttons on new-mail notifications**: Mark as read and Reply (and Archive, where your device has room for a third), straight from the notification, without opening the webmail. On Chrome and Edge you type the reply in the notification itself; elsewhere Reply opens the reply window. If a reply can't be sent from the notification, you're told, and tapping opens it with what you wrote. (iPhone and iPad don't show notification buttons: tapping opens the email, as before.)
 - Tapping a notification while the webmail is already open now shows that email there.
