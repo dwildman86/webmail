@@ -3,6 +3,13 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.13.0
+- **Calendar**: Day, Week, Month and Schedule views, in the side menu (and the bottom bar on phones). Drag down the hours to make an event, drag it to move it, drag its edge to change when it ends. Events have a place (video call links open with a click), notes, a colour and reminders as notifications, and repeat daily, on weekdays, weekly on chosen days, monthly on a date or on the second Tuesday (say), yearly, or your own way. Change or delete just one occurrence, it and the ones after, or all. Weekly meetings stay at the same time when the clocks change.
+- **Shared calendars** for the team: holidays, rotas, meeting rooms. Choose who's on each and whether they can change it or only see it; everyone gets its reminders and sees who added what. Your own calendars stay yours: *My calendar*, and any more you make.
+- **Invitations**: an email with a calendar invitation (from Outlook, Google or Apple) shows what it is, with **Add to calendar**.
+- **On your phone's own calendar**: a private link to subscribe to each calendar in Apple Calendar, Google Calendar or Outlook. Import and download `.ics` files too.
+- Data requests (GDPR) include calendar events that mention the person.
+
 ## 1.12.0
 - **Data requests (GDPR)**: find and export everything about one person for a subject access request. Every mailbox and folder is searched, Trash and Spam too: email they sent or received, and email that mentions their address or other terms you give (name, phone, customer number). Every message is checked, not just the search index. The ZIP has each email with its attachments, a spreadsheet of them, their address book entries and your team's notes on those conversations. Administrators: Settings → Data requests. Results are kept for 30 days; the record of each request stays.
 - **For your CRM or help desk**: a "GDPR request" button can start the search and download the ZIP itself, with an API key made under Settings → Data requests (it can be limited to your system's IP addresses). See the README.

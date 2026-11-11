@@ -163,17 +163,24 @@ window.Notifications = {
 
   /**
    * Opened from a notification: #m=<id> shows that email, #reply=<id> opens a reply to it (with &text=… a reply typed
-   * in the notification that couldn't be sent from there), #compose a new email, #scheduled the Scheduled folder.
+   * in the notification that couldn't be sent from there), #compose a new email, #scheduled the Scheduled folder,
+   * #calendar the calendar and #event=<id>:<when> an event (from a reminder).
    */
   followHash() {
     const hash = location.hash;
-    if (!/^#(m=|reply=|compose$|scheduled$)/.test(hash)) return;
+    if (!/^#(m=|reply=|compose$|scheduled$|calendar$|event=)/.test(hash)) return;
     history.replaceState(null, "", location.pathname);
     const p = new URLSearchParams(hash.slice(1));
     if (p.has("m")) window.Webmail.openMessage(Number(p.get("m")));
     else if (p.has("reply")) window.Webmail.replyTo(Number(p.get("reply")), p.get("text") || "");
     else if (hash === "#compose") document.querySelector(".compose-btn")?.click();
     else if (hash === "#scheduled") window.Webmail.openFolder("scheduled");
+    else if (hash === "#calendar") window.Webmail.openCalendar();
+    else if (p.has("event")) {
+      // A calendar reminder: #event=<id>:<occurrence>.
+      const [id, occurrence] = p.get("event").split(/:(.*)/s);
+      window.Webmail.openCalendar({ eventId: Number(id), occurrence: occurrence || null });
+    }
   },
 
   async subscription() {

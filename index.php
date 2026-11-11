@@ -35,6 +35,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
   <script src="assets/pwa.js?v=<?= $v ?>" defer></script>
   <script src="assets/drafts.js?v=<?= $v ?>" defer></script>
   <script src="assets/app.js?v=<?= $v ?>" defer></script>
+  <script src="assets/calendar.js?v=<?= $v ?>" defer></script>
 </head>
 <body>
   <div id="app" data-name="<?= $name ?>"><div class="boot"><span class="logo" aria-hidden="true"></span></div></div>

@@ -3,14 +3,14 @@
 "use strict";
 
 // Drafts kept on the device, finished saving here in the background (Background Sync).
-importScripts("assets/drafts.js?v=1.12.0");
+importScripts("assets/drafts.js?v=1.13.0");
 
-const VERSION = "wm-1.12.0";
+const VERSION = "wm-1.13.0";
 const SHELL = `${VERSION}-shell`;
 const MAIL = `${VERSION}-mail`;
-const SHELL_FILES = ["./", "assets/app.css?v=1.12.0", "assets/app.js?v=1.12.0", "assets/pwa.js?v=1.12.0", "assets/drafts.js?v=1.12.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
+const SHELL_FILES = ["./", "assets/app.css?v=1.13.0", "assets/app.js?v=1.13.0", "assets/calendar.js?v=1.13.0", "assets/pwa.js?v=1.13.0", "assets/drafts.js?v=1.13.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
 // API reads worth keeping for offline: the session, the lists and the messages you open.
-const OFFLINE_READS = new Set(["session", "messages", "message", "body", "contacts", "book"]);
+const OFFLINE_READS = new Set(["session", "messages", "message", "body", "contacts", "book", "calendar", "calendar/events"]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));

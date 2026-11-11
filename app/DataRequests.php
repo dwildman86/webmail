@@ -514,9 +514,13 @@ final class DataRequests
         if ($notes) {
             $zip->add('team-notes.json', json_encode($notes, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
         }
+        $events = $this->calendarEvents((string) $request['email'], $request['terms']);
+        if ($events) {
+            $zip->add('calendar.json', json_encode($events, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        }
         $request['matches'] = $n;
         $zip->add('request.json', json_encode($request + ['exported_at' => gmdate('c'), 'exported_by' => $by], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
-        $zip->add('README.txt', $this->readme($request, $n, count($book['address_book']), count($notes), $by));
+        $zip->add('README.txt', $this->readme($request, $n, count($book['address_book']), count($notes), $by, count($events)));
         $size = $zip->finish();
         $this->app->db->run('UPDATE {data_requests} SET downloads = downloads + 1, last_download_at = ? WHERE id = ?', [App::now(), $r['id']]);
         return ['messages' => $n, 'bytes' => $size, 'filename' => 'data-request-' . $r['public_id'] . '.zip'];
@@ -563,6 +567,31 @@ final class DataRequests
         return ['address_book' => $entries, 'recently_emailed_by' => $recent];
     }
 
+    /** Calendar events (on anyone's calendar, shared or personal) whose title, place or notes mention the person. */
+    private function calendarEvents(string $email, array $terms): array
+    {
+        $c = $this->c();
+        $needles = array_values(array_filter(array_map(fn ($t) => self::normal((string) $t), array_merge([$email], $terms)), fn ($t) => $t !== ''));
+        $out = [];
+        foreach ($this->app->db->all('SELECT e.*, k.name_enc AS cal_name, k.kind, u.email_enc AS owner_email FROM {cal_events} e JOIN {cal_calendars} k ON k.id = e.calendar_id
+            LEFT JOIN {users} u ON u.id = k.owner_id ORDER BY e.start_at LIMIT 100000') as $e) {
+            $title = (string) $c->decrypt($e['title_enc'], 'cal.title');
+            $location = (string) ($c->decrypt($e['location_enc'], 'cal.location') ?? '');
+            $notes = (string) ($c->decrypt($e['notes_enc'], 'cal.notes') ?? '');
+            $hay = self::normal("$title\n$location\n$notes");
+            $found = array_values(array_filter($needles, fn ($n) => str_contains($hay, $n)));
+            if (!$found) {
+                continue;
+            }
+            $out[] = ['calendar' => (string) $c->decrypt($e['cal_name'], 'cal.name'), 'calendar_kind' => $e['kind'],
+                'calendar_owner' => $e['kind'] === 'personal' ? $c->decrypt($e['owner_email'], 'users.email') : null,
+                'title' => $title, 'location' => $location ?: null, 'notes' => $notes ?: null, 'all_day' => (bool) $e['all_day'],
+                'start' => $e['all_day'] ? substr($e['start_at'], 0, 10) : self::iso($e['start_at']), 'end' => $e['all_day'] ? substr($e['end_at'], 0, 10) : self::iso($e['end_at']),
+                'repeats' => $e['repeat_json'] ? json_decode($e['repeat_json'], true) : null, 'matched_on' => $found];
+        }
+        return $out;
+    }
+
     /** The team's notes on the matching conversations (shared mailboxes). */
     private function notes(array $threads): array
     {
@@ -577,7 +606,7 @@ final class DataRequests
         return $out;
     }
 
-    private function readme(array $r, int $messages, int $entries, int $notes, string $by): string
+    private function readme(array $r, int $messages, int $entries, int $notes, string $by, int $events = 0): string
     {
         $terms = $r['terms'] ? implode(', ', array_map(fn ($t) => "\"$t\"", $r['terms'])) : 'none';
         $boxes = is_array($r['mailboxes']) ? implode(', ', $r['mailboxes']) : 'all mailboxes';
@@ -599,6 +628,7 @@ final class DataRequests
         messages/        Each email as message.txt (headers and text) and message.html (as it was sent), with its attachments.
         contacts.json    The person's address book entries ($entries) and who has emailed them.
         team-notes.json  Notes the team wrote on these conversations ($notes), if there are any.
+        calendar.json    Calendar events whose title, place or notes mention the address or a term ($events), if there are any.
         request.json     The request, for your records.
 
         How the search works

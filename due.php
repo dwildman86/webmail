@@ -1,5 +1,5 @@
 <?php
-// Sends scheduled email and brings back snoozed email when it's due. The webmail does this by itself while it's being
+// Sends scheduled email, brings back snoozed email and sends calendar reminders when they're due. The webmail does this by itself while it's being
 // used and when email arrives; where the hosting has cron, calling this every minute makes it happen on time even when
 // nobody has the webmail open:
 //

@@ -66,6 +66,13 @@ const ICONS = {
   template: "M5 3h14v18H5z M8 7h8 M8 11h8 M8 15h5",
   filter: "M4 5h16l-6 8v5l-4 2v-7z",
   up: "M12 19V5 M6 11l6-6 6 6",
+  calendar: "M4 6h16v14H4z M4 10h16 M8 3v4 M16 3v4 M8 14h2 M14 14h2 M8 17h2",
+  more: "M5 12h.01 M12 12h.01 M19 12h.01",
+  layers: "M12 3l9 5-9 5-9-5z M3 13l9 5 9-5",
+  check: "M5 12l5 5 9-10",
+  eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  pin: "M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z M12 7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
+  bell: "M6 16V11a6 6 0 0 1 12 0v5l2 2H4z M10 21h4",
   down: "M12 5v14 M6 13l6 6 6-6",
 };
 const icon = (name) => h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
@@ -292,7 +299,7 @@ function recoveryCodesBox(codes, text) {
 }
 
 // ------------------------------------------------------------------------------------------------ the shell
-let $shell, $folders, $list, $reader, $listTitle, $search, $tabbar;
+let $shell, $folders, $list, $reader, $listTitle, $search, $tabbar, $calPane;
 function renderShell() {
   $folders = h("ul", { class: "folders" });
   $list = h("div", { class: "messages", role: "list" });
@@ -324,6 +331,8 @@ function renderShell() {
         h("button", { class: "icon-btn", title: "Refresh", "aria-label": "Refresh", onclick: () => refresh() }, icon("refresh"))),
       $listTitle, $list),
     $reader,
+    // The calendar takes the list's and the reader's place (assets/calendar.js).
+    ($calPane = h("section", { class: "cal-pane", "aria-label": "Calendar" })),
     // On a phone, tapping anywhere outside the open menu closes it.
     h("div", { class: "scrim", "aria-hidden": "true", onclick: () => $shell.classList.remove("menu") }),
     ($tabbar = h("nav", { class: "tabbar", "aria-label": "Quick links" })));
@@ -374,8 +383,9 @@ function renderFolders() {
   renderTabbar();
   $search.placeholder = state.folder === "contacts" ? "Search contacts" : "Search mail";
   $search.setAttribute("aria-label", $search.placeholder);
-  $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"]].map(([key, label, ic]) => {
-    const n = key === "scheduled" ? state.scheduledCount : ["starred", "snoozed"].includes(key) ? 0 : unreadFor(key);
+  $shell.classList.toggle("cal-mode", state.folder === "calendar");
+  $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"], ["calendar", "Calendar", "calendar"]].map(([key, label, ic]) => {
+    const n = key === "scheduled" ? state.scheduledCount : ["starred", "snoozed", "contacts", "calendar"].includes(key) ? 0 : unreadFor(key);
     return h("li", { class: key === "contacts" ? "sep" : "" }, h("a", { href: "#", class: state.folder === key && !state.query ? "on" : "", onclick: (e) => {
       e.preventDefault();
       openFolder(key);
@@ -411,7 +421,7 @@ function openFolder(key, label = 0) {
 
 /**
  * Phones: quick buttons along the bottom of the screen, in reach of a thumb. Inbox, Sent, a raised Compose in the
- * middle, Contacts, and More for the rest (the side menu: every folder, mailboxes, settings).
+ * middle, Contacts, and More for the rest (the side menu: every folder, mailboxes, settings). Calendar is second.
  */
 function renderTabbar() {
   if (!$tabbar) return;
@@ -425,10 +435,13 @@ function renderTabbar() {
     h("span", { class: "tab-icon" }, icon(ic), badge ? h("span", { class: "tab-badge" }, badge > 99 ? "99+" : String(badge)) : null), h("span", { class: "tab-label" }, label));
   $tabbar.replaceChildren(
     tab("inbox", "Inbox", "inbox", unread),
-    tab("sent", "Sent", "sent"),
-    h("button", { type: "button", class: "tab tab-compose", "aria-label": "Compose", onclick: () => compose() }, h("span", { class: "tab-fab" }, icon("compose"))),
+    tab("calendar", "Calendar", "calendar"),
+    // In the calendar, the middle button makes an event instead of an email.
+    state.folder === "calendar" && window.Calendar
+      ? h("button", { type: "button", class: "tab tab-compose", "aria-label": "New event", onclick: () => window.Calendar.newEvent() }, h("span", { class: "tab-fab" }, icon("compose")))
+      : h("button", { type: "button", class: "tab tab-compose", "aria-label": "Compose", onclick: () => compose() }, h("span", { class: "tab-fab" }, icon("compose"))),
     tab("contacts", "Contacts", "contacts"),
-    h("button", { type: "button", class: `tab${["inbox", "sent", "contacts"].includes(state.folder) || state.query ? "" : " on"}`, onclick: () => $shell.classList.add("menu") },
+    h("button", { type: "button", class: `tab${["inbox", "calendar", "contacts"].includes(state.folder) || state.query ? "" : " on"}`, onclick: () => $shell.classList.add("menu") },
       h("span", { class: "tab-icon" }, icon("menu")), h("span", { class: "tab-label" }, "More")));
 }
 
@@ -486,6 +499,7 @@ function placeholder() {
 
 // ------------------------------------------------------------------------------------------------ the list
 async function loadList(append = false) {
+  if (state.folder === "calendar") return window.Calendar?.showCalendar();
   if (state.folder === "contacts") return loadContacts();
   if (state.folder === "scheduled" && !state.query) return loadScheduled();
   if (state.folder === "label" && !labelById(state.label)) { state.folder = "inbox"; state.label = 0; renderFolders(); }
@@ -1090,7 +1104,11 @@ function mailCard(t, open) {
   };
   const bar = hasRemote && h("div", { class: "images-bar" }, "Remote images are hidden, so the sender can't tell you've opened this.",
     h("button", { class: "btn btn-sm", onclick: (e) => { load(true); e.currentTarget.parentElement.remove(); } }, "Show images"));
-  content.append(...[bar, frame, t.attachments.length > 0 && h("div", { class: "atts" }, t.attachments.map((a) =>
+  // A calendar invitation (or any .ics file): what it is, with Add to calendar.
+  const invite = t.attachments.find((a) => a.id && !a.url && (/^(text|application)\/(calendar|ics)/i.test(a.content_type || "") || /\.ics$/i.test(a.filename || "")));
+  const inviteSlot = invite && window.Calendar ? h("div", { class: "invite-slot" }) : null;
+  if (inviteSlot) window.Calendar.invitationCard(invite).then((card) => inviteSlot.replaceChildren(card));
+  content.append(...[inviteSlot, bar, frame, t.attachments.length > 0 && h("div", { class: "atts" }, t.attachments.map((a) =>
     a.url ? h("a", { class: "att", href: a.url, target: "_blank", rel: "noopener noreferrer" }, icon("clip"), h("span", {}, a.filename), h("small", { class: "muted" }, size(a.size)))
       : h("a", { class: "att", href: `api.php?a=attachment&id=${a.id}`, download: a.filename }, icon("clip"), h("span", {}, a.filename), h("small", { class: "muted" }, size(a.size)))))].filter(Boolean));
   const recipients = [...(t.to || []), ...(t.cc || [])].map(fmtAddr).join(", ");
@@ -2591,5 +2609,9 @@ document.addEventListener("keydown", (e) => {
 setInterval(() => { if ($shell && document.visibilityState === "visible" && !document.querySelector(".overlay:not([hidden])")) refresh(); }, 30000);
 document.addEventListener("visibilitychange", () => { if ($shell && document.visibilityState === "visible") refresh(); });
 
-window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo };
+window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo,
+  openCalendar: (opts = {}) => {
+    state.folder = "calendar"; state.label = 0; state.query = ""; $search.value = "";
+    $shell.classList.remove("menu", "reading"); renderFolders(); window.Calendar?.showCalendar(opts);
+  } };
 start();

@@ -170,12 +170,16 @@ final class DataRequestsTest extends TestCase
         $this->receive(['from' => ['address' => 'jane@customer.example', 'name' => 'Jane Doe'], 'subject' => 'Refund: order #1042', 'text' => 'Second one']);
         $this->other();
         (new Team($this->app))->addNote($this->admin, $a, 'Refund approved by finance.');
+        $cal = new \Webmail\Calendar($this->app);
+        $mine = $cal->calendars($this->admin)[0]['id'];
+        $cal->saveEvent($this->admin, ['calendar_id' => $mine, 'title' => 'Call Jane back', 'notes' => 'jane@customer.example about the refund', 'start' => '2026-10-02T10:00:00Z', 'end' => '2026-10-02T10:30:00Z']);
+        $cal->saveEvent($this->admin, ['calendar_id' => $mine, 'title' => 'Dentist', 'start' => '2026-10-03T10:00:00Z', 'end' => '2026-10-03T10:30:00Z']);
         $id = $this->dr->create(['email' => 'jane@customer.example', 'reference' => 'TICKET-77'], ['user' => $this->admin['id']])['id'];
 
         $files = $this->export($id);
         $names = array_keys($files);
         sort($names);
-        $this->assertSame(['README.txt', 'contacts.json', 'messages.csv',
+        $this->assertSame(['README.txt', 'calendar.json', 'contacts.json', 'messages.csv',
             'messages/0001 2026-10-01 Refund order 1042/message.html', 'messages/0001 2026-10-01 Refund order 1042/message.txt',
             'messages/0002 2026-10-01 Refund order 1042/attachments/receipt.pdf',
             'messages/0002 2026-10-01 Refund order 1042/message.html', 'messages/0002 2026-10-01 Refund order 1042/message.txt',
@@ -193,6 +197,8 @@ final class DataRequestsTest extends TestCase
         $this->assertSame([['address_book' => 'shared', 'email' => 'jane@customer.example', 'name' => 'Jane Doe', 'phone' => '07700 900123']],
             array_map(fn ($e) => array_intersect_key($e, array_flip(['address_book', 'email', 'name', 'phone'])), $contacts['address_book']));
         $this->assertSame('Refund approved by finance.', json_decode($files['team-notes.json'], true)[0]['note']);
+        $events = json_decode($files['calendar.json'], true);
+        $this->assertSame([['Call Jane back', 'My calendar', 'admin@acme.test', ['jane@customer.example']]], array_map(fn ($e) => [$e['title'], $e['calendar'], $e['calendar_owner'], $e['matched_on']], $events));
         $this->assertStringContainsString('article 15(4)', $files['README.txt']);
         $this->assertStringContainsString('TICKET-77', $files['README.txt']);
         $this->assertSame(2, json_decode($files['request.json'], true)['matches']);

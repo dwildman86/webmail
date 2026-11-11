@@ -314,6 +314,9 @@ try {
             Http::json(['ok' => true]);
     }
 
+    if ($action === 'calendar' || str_starts_with($action, 'calendar/')) {
+        (new \Webmail\Calendar($app))->route($action, $method, $user);
+    }
     if ($action === 'templates' || str_starts_with($action, 'templates/')) {
         (new \Webmail\Templates($app))->route($action, $method, $user);
     }

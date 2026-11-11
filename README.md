@@ -111,11 +111,27 @@ marks.
   - While writing, the signature shows under the message, with a switch to leave it out of that email.
   - Signatures from before 1.5.0 move to GhostParse by themselves, unless the address already has one there. Replies keep the thread together in the recipient's mail app too.
 - **Contacts**: two address books. **My contacts** is private to each person. **Shared** is seen by everyone, and administrators keep it up to date. Add contacts by hand, with **Add to contacts** on any email, or by importing a **.vcf** or **.csv** file from Gmail, Outlook, iPhone or Android. Importing fills in missing details for contacts you already have and never overwrites them. Export either book as a .vcf file. When you write an email, names and addresses are suggested from both books, then from people you've written to before.
+- **Calendar**: see *Calendar* below.
 - **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `b` snooze, `l` labels, `Esc` close.
+
+### Calendar
+
+**Calendar** in the side menu (on phones, in the bottom bar).
+
+- **Views**: Day, Week, Month and Schedule (what's coming, day by day: the first view on phones). `t` today, `d` `w` `m` `s` the views, `←` `→` back and forward (or swipe on a phone), `n` a new event.
+- **Making events**: drag down the hours in the day or week view to make an event that long, click a day in the month, or **New event**. Drag an event to move it to another time or day, and drag its bottom edge to change when it ends. On phones, tap a time.
+- **Events** have a place (a video call link opens with a click), notes, a colour, and reminders as notifications (turn notifications on under **Settings → Sign-in & alerts**). They can repeat: every day, every weekday, weekly on chosen days, every 2 weeks, monthly on a date or on, say, the second Tuesday, yearly, or your own pattern, until a date or a number of times. Change or delete one occurrence, that one and the ones after it, or all of them. A weekly 9:00 meeting stays at 9:00 when the clocks change.
+- **Your calendars**: everyone has *My calendar*, and can add more (*Family*, *Gym*). Tick a calendar to show or hide it.
+- **Shared calendars**: holidays, rotas, meeting rooms. Whoever makes one chooses who's on it and whether each person can change it or only see it; they're told when they're added. Everyone on it sees changes, with who added each event, and gets its reminders. Its owner and administrators can rename it, change who's on it or delete it; anyone else can leave it.
+- **Invitations in email**: an email with a calendar file (an invitation from Outlook, Google or Apple, or any `.ics`) shows what it is, with **Add to calendar**. Adding it again later updates it rather than doubling up.
+- **Import and export**: a calendar's menu (`…` beside it) imports a `.ics` file (from Google Calendar, Outlook or Apple) and downloads one.
+- **On your phone or computer's own calendar**: a calendar's menu → **On your phone or computer** gives a private link to subscribe to in Apple Calendar, Google Calendar or Outlook. It's read-only there and updates every few hours (it's up to the app). Anyone with the link can see the calendar, so keep it to yourself; make a new one there if it gets out, and the old one stops working.
+
+Reminders are sent with the rest of the webmail's due work (see the next section): for reminders on time when nobody has the webmail open, add the `due.php` cron job.
 
 ### Send later and snooze
 
-Shared hosting often has no cron, so the webmail sends scheduled email and brings back snoozed email by itself: whenever
+Shared hosting often has no cron, so the webmail sends scheduled email, brings back snoozed email and sends calendar reminders by itself: whenever
 someone is using it (the page checks every 30 seconds) and whenever email arrives. On a quiet webmail that nobody has
 open, that can be a little after the time. For exact times, add a cron job that calls `due.php` every minute (cPanel →
 **Cron Jobs**):
@@ -134,7 +150,7 @@ part-way is never sent twice: it's marked *not sent*, to check in Sent first.
 - **Passkeys**: **Settings → Sign-in & alerts → Add a passkey**. After that, sign in with your face, fingerprint or device PIN: choose *Sign in with Face ID* (or *with a passkey*, *Windows Hello*…) on the sign-in page, or pick the passkey your keyboard suggests in the email box. In the installed app, a device that has used its passkey asks for Face ID straight away. Your fingerprint or face never leaves the device. Passwords keep working too.
 - **Notifications**: **Settings → Sign-in & alerts → Turn on**, once on each device. You're told about new email in your inboxes, even when the webmail is closed. In the installed app they keep coming even after you sign out (it's your own device); in a browser tab, signing out turns them off, in case it's a shared computer. On iPhone and iPad, this works from the Home Screen app (iOS 16.4 or newer).
 - **Notification buttons**: new-mail notifications have **Mark as read** and **Reply**, and **Archive** where the device shows a third button. They work without opening the webmail. On Chrome and Edge (Windows, Mac, Linux, Android) you can type the reply in the notification and it's sent from the mailbox the email came to, in the same thread; elsewhere Reply opens the reply window. If a reply typed in a notification can't be sent (no connection, or the notification is more than 7 days old), a notification says so, and tapping it opens the reply with your text in it. A notification's buttons only act on its own email, for its own person, and stop working when that person's password changes. iPhone and iPad don't show notification buttons: tapping opens the email.
-- **On your phone**: quick buttons along the bottom: Inbox (with its unread count), Sent, Compose, Contacts, and More for every other folder and Settings. Tap the open folder again to go back to the top.
+- **On your phone**: quick buttons along the bottom: Inbox (with its unread count), Calendar, Compose (a new event, in the calendar), Contacts, and More for every other folder and Settings. Tap the open folder again to go back to the top.
 - **Swipe on your phone**: swipe an email right to delete it, or left to archive it, with Undo.
 - **Offline**: the app opens without a connection and shows the mail you've already opened on that device. Signing out clears it.
 

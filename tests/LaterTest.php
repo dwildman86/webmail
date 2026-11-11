@@ -82,18 +82,18 @@ final class LaterTest extends TestCase
         $this->assertNull($this->app->db->value('SELECT id FROM {messages} WHERE id = ?', [$draft]), 'no longer a draft');
         $this->assertStringNotContainsString('Jane', (string) $this->app->db->value('SELECT payload_enc FROM {scheduled}'), 'encrypted');
 
-        $this->assertSame(['woken' => 0, 'sent' => 0], $this->due()->run());
+        $this->assertSame(['woken' => 0, 'sent' => 0, 'reminded' => 0], $this->due()->run());
         $this->assertSame(0, $this->sentCount());
 
         $this->later(2 * 3600);
-        $this->assertSame(['woken' => 0, 'sent' => 1], $this->due()->run());
+        $this->assertSame(['woken' => 0, 'sent' => 1, 'reminded' => 0], $this->due()->run());
         $req = end($this->requests);
         $this->assertSame(['jane@customer.example'], $req['body']['to']);
         $this->assertSame('See you Monday', $req['body']['subject']);
         $this->assertSame('a.txt', $req['body']['attachments'][0]['filename']);
         $this->assertSame([], $this->scheduler()->list($this->olive['id']), 'gone from the queue');
         $this->assertSame(['See you Monday'], array_column($this->store->list($this->olive['id'], $this->mb, 'sent')['messages'], 'subject'), 'and in Sent');
-        $this->assertSame(['woken' => 0, 'sent' => 0], $this->due()->run(), 'never twice');
+        $this->assertSame(['woken' => 0, 'sent' => 0, 'reminded' => 0], $this->due()->run(), 'never twice');
         $this->assertSame(1, $this->sentCount());
     }
 

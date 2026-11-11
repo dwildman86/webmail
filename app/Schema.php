@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -364,6 +364,63 @@ final class Schema
                     KEY subject (subject_bidx),
                     FOREIGN KEY (key_id) REFERENCES {api_keys}(id) ON DELETE SET NULL,
                     FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // The calendar: personal calendars and shared ones, who's on each (and their private feed link), and events.
+            10 => [
+                "CREATE TABLE IF NOT EXISTS {cal_calendars} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    kind ENUM('personal','shared') NOT NULL,
+                    owner_id INT UNSIGNED NULL,
+                    name_enc TEXT NOT NULL,
+                    color VARCHAR(7) NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    KEY owner (owner_id),
+                    FOREIGN KEY (owner_id) REFERENCES {users}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {cal_members} (
+                    calendar_id INT UNSIGNED NOT NULL,
+                    user_id INT UNSIGNED NOT NULL,
+                    role ENUM('owner','edit','view') NOT NULL,
+                    hidden TINYINT(1) NOT NULL DEFAULT 0,
+                    feed_bidx BINARY(16) NULL UNIQUE,
+                    feed_enc TEXT NULL,
+                    added_at DATETIME NOT NULL,
+                    PRIMARY KEY (calendar_id, user_id),
+                    KEY user (user_id),
+                    FOREIGN KEY (calendar_id) REFERENCES {cal_calendars}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {cal_events} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    calendar_id INT UNSIGNED NOT NULL,
+                    uid VARCHAR(255) NOT NULL,
+                    title_enc TEXT NOT NULL,
+                    location_enc TEXT NULL,
+                    notes_enc MEDIUMTEXT NULL,
+                    all_day TINYINT(1) NOT NULL DEFAULT 0,
+                    start_at DATETIME NOT NULL,
+                    end_at DATETIME NOT NULL,
+                    tz VARCHAR(64) NOT NULL,
+                    repeat_json VARCHAR(500) NULL,
+                    repeat_until DATETIME NULL,
+                    exdates TEXT NULL,
+                    reminders VARCHAR(100) NULL,
+                    next_reminder_at DATETIME NULL,
+                    reminded_to DATETIME NULL,
+                    color VARCHAR(7) NULL,
+                    created_by INT UNSIGNED NULL,
+                    updated_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    KEY range_start (calendar_id, start_at),
+                    KEY range_until (calendar_id, repeat_until),
+                    KEY reminder (next_reminder_at),
+                    KEY uid (calendar_id, uid(64)),
+                    FOREIGN KEY (calendar_id) REFERENCES {cal_calendars}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (created_by) REFERENCES {users}(id) ON DELETE SET NULL,
+                    FOREIGN KEY (updated_by) REFERENCES {users}(id) ON DELETE SET NULL
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

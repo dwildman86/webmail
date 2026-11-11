@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace Webmail;
 
 /**
- * Work that's due: snoozed email whose time has come, and emails scheduled to be sent. Shared hosting often has no cron,
+ * Work that's due: snoozed email whose time has come, emails scheduled to be sent, and calendar reminders. Shared hosting often has no cron,
  * so this runs after the webmail answers a request (anyone using it, the page checking for new mail every 30 seconds,
  * GhostParse delivering email) and from due.php, which a cron job can call every minute where there is one, for exact
  * times when nobody has the webmail open.
@@ -17,6 +17,8 @@ final class Due
     public ?\Closure $onWoken = null;
     /** Sends the scheduled email (replaced in tests). */
     public ?Scheduler $scheduler = null;
+    /** Sends calendar reminders (replaced in tests). */
+    public ?Calendar $calendar = null;
 
     public function __construct(private App $app)
     {
@@ -48,14 +50,15 @@ final class Due
         $now = App::now();
         return (bool) $this->app->db->value('SELECT 1 FROM {messages} WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? LIMIT 1', [$now])
             || (bool) $this->app->db->value("SELECT 1 FROM {scheduled} WHERE (status = 'waiting' AND send_at <= ?) OR (status = 'sending' AND claimed_at < ?) LIMIT 1",
-                [$now, gmdate('Y-m-d H:i:s', time() - 600)]);
+                [$now, gmdate('Y-m-d H:i:s', time() - 600)])
+            || (new Calendar($this->app))->remindersDue();
     }
 
     /** Do what's due. Returns ['woken' => n, 'sent' => n], or null when another request is doing it. */
     public function run(int $seconds = 20): ?array
     {
         if (!$this->pending()) {
-            return ['woken' => 0, 'sent' => 0];
+            return ['woken' => 0, 'sent' => 0, 'reminded' => 0];
         }
         // Locks are server-wide: this install's own (its database and table prefix), so other webmails on the server don't wait.
         $lock = self::lockName($this->app);
@@ -72,7 +75,8 @@ final class Due
                 }
             }
             $sent = ($this->scheduler ?? new Scheduler($this->app))->runDue($seconds);
-            return ['woken' => count($woken), 'sent' => $sent];
+            $reminded = ($this->calendar ?? new Calendar($this->app))->sendReminders();
+            return ['woken' => count($woken), 'sent' => $sent, 'reminded' => $reminded];
         } finally {
             $this->app->db->value('SELECT RELEASE_LOCK(?)', [$lock]);
         }
