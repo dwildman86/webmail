@@ -21,6 +21,7 @@ if (!Config::installed()) {
 try {
     $app = App::get();
     Schema::upgrade($app->db);
+    (new \Webmail\Waf($app))->guard('feed');
     $cal = new Calendar($app);
     $found = $cal->byFeed((string) ($_GET['t'] ?? ''));
     if (!$found) {

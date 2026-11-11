@@ -161,10 +161,37 @@ part-way is never sent twice: it's marked *not sent*, to check in Sent first.
 
 **Settings → Security**:
 
-- **Trusted networks**: *Administration only from* your office's and VPN's addresses (elsewhere, administrators can read and send their email but not change settings or users), and *Everyone only from* (signing in and using the webmail at all). One IP address or range a line: `203.0.113.7`, `203.0.113.0/24`, `2001:db8::/32`. A person can have their own instead, under **Users → Edit** (*Only from these networks*). Someone signed in who leaves them is signed out at their next click, with the reason. The page shows your address now: a setting that would lock you out isn't saved. Behind a proxy or Cloudflare, the webmail sees the proxy's address, so limits by network won't work there.
+- **Trusted networks**: *Administration only from* your office's and VPN's addresses (elsewhere, administrators can read and send their email but not change settings or users), and *Everyone only from* (signing in and using the webmail at all). One IP address or range a line: `203.0.113.7`, `203.0.113.0/24`, `2001:db8::/32`. A person can have their own instead, under **Users → Edit** (*Only from these networks*). Someone signed in who leaves them is signed out at their next click, with the reason. The page shows your address now: a setting that would lock you out isn't saved. Behind Cloudflare or another proxy, set that under **Settings → Firewall** first, so the visitor's own address is used.
 - **Passkeys only**: for administrators, or everyone. Nobody it applies to can sign in with a password; they use a passkey (Face ID, Touch ID, Windows Hello, a fingerprint, or a security key). Someone without one yet signs in with their password and second step once and must add a passkey before anything else. Changes that ask for your password ask for your passkey instead. You need a passkey yourself to turn it on, and the webmail on https://. Lost passkey: **Users → Edit → Reset two-step verification**, and they add a new one at their next sign-in.
 
 Saving either asks for your password (or passkey). Locked out anyway (the office's address changed, say)? On the server, in the webmail's folder: `php security-reset.php` turns both off (`--user=you@example.com` also clears that person's own networks).
+
+## Firewall
+
+The webmail has its own firewall, for hosting that has none: **Settings → Firewall** (administrators). It looks at every
+request to the webmail before the webmail answers it:
+
+- **Attacks** in the address and headers: SQL injection, scripts (XSS), reading server files (path traversal), running
+  commands, PHP object and template injection, Log4Shell and Shellshock. Never in the email people write or receive,
+  and never in a search: an email about code may say `<script>` or `UNION SELECT`, and still goes.
+- **Attack tools** (sqlmap, Nikto, Nuclei, WPScan and others), odd requests (wrong methods, made-up actions, oversized
+  or garbled ones), and other websites posting to the webmail.
+- **Guessing and floods**: wrong passwords and codes add up, and more than 300 requests a minute from one address (60
+  before signing in) are slowed down (Strict: 150 and 25).
+
+A plain attack is refused straight away (with a reference, `W123`, to quote). Each finding adds to the address's score;
+15 in an hour blocks it for 15 minutes, then an hour, then a day if it comes back within a week. The page shows what it
+has seen and blocked, with **Unblock** and **Block**, and lists of addresses to always allow and always block.
+
+- **Never blocked**: the *Always allow* list, the trusted networks (Settings → Security), and any address an
+  administrator is signed in from.
+- **Behind Cloudflare or another proxy**: choose it under *Visitors reach the webmail*, so the firewall (and trusted
+  networks, and the list of where people are signed in) see each visitor's own address rather than the proxy's. If the
+  webmail sees Cloudflare without being told, it says so and doesn't block anyone.
+- **Monitoring only** logs what it would refuse and block, to try it out first.
+- Locked out? On the server, `php security-reset.php` clears its blocks and its block list.
+
+It doesn't replace your host's own protection: it can only see requests that reach the webmail's PHP files.
 
 ## Data requests (GDPR)
 

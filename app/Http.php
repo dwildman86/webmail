@@ -44,8 +44,9 @@ final class Http
             || (int) ($_SERVER['SERVER_PORT'] ?? 0) === 443;
     }
 
+    /** The visitor's address: the connection's, or behind Cloudflare or a proxy set up in Settings → Firewall, the visitor's. */
     public static function ip(): string
     {
-        return (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
+        return Waf::clientIp();
     }
 }

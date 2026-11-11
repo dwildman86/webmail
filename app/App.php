@@ -6,7 +6,7 @@ namespace Webmail;
 /** The app's shared pieces, built once per request from config.php. */
 final class App
 {
-    public const VERSION = '1.15.0';
+    public const VERSION = '1.16.0';
 
     private static ?self $instance = null;
     public readonly Db $db;
@@ -25,9 +25,16 @@ final class App
         return self::$instance ??= new self(Config::load());
     }
 
+    /** An app is set (in tests, without a config file). */
+    public static function has(): bool
+    {
+        return self::$instance !== null;
+    }
+
     public static function set(?self $app): void
     {
         self::$instance = $app;
+        Waf::forget(); // its settings were the old app's
     }
 
     /** The signing secrets webhooks are accepted with: the current one and, while rotating, the previous one. */

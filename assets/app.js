@@ -2096,7 +2096,7 @@ async function openSettings(tab = "account") {
   document.querySelector(".overlay.settings-overlay")?.remove();
   const body = h("div", { class: "tab-body" });
   const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["templates", "Templates"], ["rules", "Rules & labels"], ["import", "Import email"], ["security", "Sign-in & alerts"],
-    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-security", "Security"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
+    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-security", "Security"], ["admin-firewall", "Firewall"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
     nav.replaceChildren(...tabs.map(([k, label]) => h("button", { class: k === key ? "on" : "", "aria-current": k === key ? "page" : null, onclick: () => show(k) }, label)));
@@ -2658,7 +2658,7 @@ async function securityPolicy() {
   return h("div", {},
     h("section", {}, h("h3", {}, "Trusted networks"),
       h("p", { class: "muted" }, "Limit where the webmail can be used from: your office's and VPN's IP addresses. Someone signed in who leaves them is signed out at their next click. One address or range a line: ", h("code", {}, "203.0.113.7"), ", ", h("code", {}, "203.0.113.0/24"), ", ", h("code", {}, "2001:db8::/32"), "."),
-      h("p", { class: "notice info" }, "Your address now: ", h("strong", { class: "mono" }, p.your_ip), ". Behind a proxy or Cloudflare, this is the proxy's address: limits by network won't work there."),
+      h("p", { class: "notice info" }, "Your address now: ", h("strong", { class: "mono" }, p.your_ip), ". Behind Cloudflare or another proxy? Say so under Settings → Firewall, so visitors' own addresses are used."),
       formFor([
         h("label", { class: "field" }, "Administration only from", h("small", {}, "Elsewhere, administrators can read and send their email but not change settings or users. Empty: anywhere."),
           ranges("admin_ips", p.admin_ips, "203.0.113.0/24  # office\n198.51.100.7  # VPN")),
@@ -2676,6 +2676,80 @@ async function securityPolicy() {
         h("p", { class: "muted small" }, "You need a passkey yourself first, and the webmail on https://. If you're ever locked out, on the server: ", h("code", {}, "php security-reset.php"), "."),
         confirmPw()],
       "Save", async (v) => { await api("admin/security", { method: "POST", body: { passkeys_only: v.passkeys_only, password: v.password } }); toast("Saved."); openSettings("admin-security"); })));
+}
+
+const WAF_RULES = { sqli: "SQL injection", xss: "Script injection (XSS)", traversal: "Reading server files", command: "Running commands", php_object: "PHP object injection",
+  template: "Template injection", ssrf: "Server-side request", log4shell: "Log4Shell", shellshock: "Shellshock", scanner: "Attack tool", no_agent: "No browser name",
+  method: "Wrong request type", bad_action: "Made-up action", path_probe: "Probing for files", oversize: "Oversized request", null_byte: "Hidden bytes", crlf: "Line breaks in the address",
+  bad_utf8: "Garbled text", cross_site: "From another website", rate_limit: "Too many requests", deny_list: "On the block list", failed_invalid_login: "Wrong password",
+  failed_invalid_code: "Wrong two-step code", failed_rate_limited: "Kept trying after a limit", failed_csrf: "Expired or forged form", failed_unknown_passkey: "Unknown passkey",
+  failed_invalid_passkey: "Bad passkey signature", failed_cloned_passkey: "Copied passkey", failed_unauthorized: "Bad API key", failed_not_found: "Made-up action" };
+const wafRule = (r) => WAF_RULES[r] || r.replace(/^failed_/, "").replace(/_/g, " ");
+
+/** Settings → Firewall (administrators): what it's seen and blocked, and how it works. */
+async function firewallSettings() {
+  const f = await api("admin/firewall");
+  const s = f.settings;
+  const when = (iso) => new Date(iso).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const stat = (n, label) => h("div", { class: "fw-stat" }, h("strong", {}, String(n)), h("span", {}, label));
+  const radio = (name, v, label, hint, checked) => h("label", { class: "check address" }, h("input", { type: "radio", name, value: v, checked }),
+    h("span", {}, h("strong", {}, label), hint && h("small", { class: "muted" }, hint)));
+  const ranges = (name, list, placeholder) => h("textarea", { name, rows: 3, class: "mono-input", placeholder }, (list || []).join("\n"));
+  const proxyRanges = h("label", { class: "field", hidden: s.proxy !== "custom" }, "The proxy's addresses", h("small", {}, "Its X-Forwarded-For header is only believed when the request comes from these."),
+    ranges("proxy_ranges", s.proxy_ranges, "10.0.0.0/8"));
+  const actionPill = (a) => h("span", { class: `pill fw-${a}` }, { blocked: "Refused", limited: "Slowed", banned: "Address blocked", logged: "Logged" }[a] || a);
+  const blockForm = formFor([h("div", { class: "row" },
+    h("label", { class: "field grow" }, "Block an address", h("input", { name: "ip", required: true, placeholder: "203.0.113.7", class: "mono-input" })),
+    h("label", { class: "field" }, "For", h("select", { name: "hours" }, [[1, "an hour"], [24, "a day"], [168, "a week"], [720, "30 days"], [8760, "a year"]].map(([v, l]) => h("option", { value: String(v), selected: v === 24 }, l)))))],
+  "Block", async (v) => { await api("admin/firewall/block", { method: "POST", body: { ip: v.ip.trim(), hours: Number(v.hours) } }); toast(`${v.ip} is blocked.`); openSettings("admin-firewall"); });
+  const unblock = (ip) => async (e) => { e.currentTarget.disabled = true; try { await api("admin/firewall/unblock", { method: "POST", body: { ip } }); toast(`${ip} is unblocked.`); openSettings("admin-firewall"); } catch (err) { toast(err.message); } };
+  const quickBlock = (ip) => async (e) => {
+    if (!confirm(`Block ${ip} for a day?`)) return;
+    e.currentTarget.disabled = true;
+    try { await api("admin/firewall/block", { method: "POST", body: { ip, hours: 24 } }); toast(`${ip} is blocked for a day.`); openSettings("admin-firewall"); } catch (err) { toast(err.message); }
+  };
+  return h("div", {},
+    h("section", {}, h("h3", {}, "Firewall ", h("span", { class: `pill fw-mode-${s.mode}` }, { block: "On", monitor: "Monitoring only", off: "Off" }[s.mode])),
+      h("p", { class: "muted" }, "It checks every request before the webmail answers it: attacks hidden in addresses and headers (SQL injection, scripts, reading server files, running commands, Log4Shell), attack tools, other websites posting here, password guessing and floods of requests. An address that keeps at it is blocked: 15 minutes, then an hour, then a day. It never reads the email people write or receive."),
+      f.cloudflare_detected && h("div", { class: "notice warn" }, "Requests come through Cloudflare, but the firewall is set to Directly: it can't tell visitors apart, so it isn't blocking anyone. Choose Cloudflare below."),
+      h("div", { class: "fw-stats" }, stat(f.stats.refused_24h, "refused today"), stat(f.stats.blocked_now, "addresses blocked now"),
+        stat(f.stats.addresses_24h, "addresses seen today"), stat(f.stats.logged_24h, "logged only")),
+      f.rules_24h.length > 0 && h("p", { class: "muted small" }, "Today: ", f.rules_24h.map((r) => `${wafRule(r.rule)} (${r.n})`).join(", "), ".")),
+    h("section", {}, h("h3", {}, `Blocked now (${f.blocked.length})`),
+      f.blocked.length ? h("table", { class: "list" }, h("tr", {}, h("th", {}, "Address"), h("th", {}, "Until"), h("th", {}, "Why"), h("th", {}, "")),
+        f.blocked.map((b) => h("tr", {}, h("td", { class: "mono" }, b.ip), h("td", {}, when(b.until)), h("td", {}, (b.reason || "").replace(/\(last: ([\w]+)\)/, (m, r) => `(last: ${wafRule(r).toLowerCase()})`), b.blocks > 1 && h("div", { class: "muted small" }, `Blocked ${b.blocks} times this week`)),
+          h("td", {}, h("button", { class: "btn btn-sm", onclick: unblock(b.ip) }, "Unblock")))))
+        : h("p", { class: "muted" }, "Nobody is blocked."),
+      blockForm),
+    h("section", {}, h("h3", {}, "What it's seen"),
+      f.events.length ? h("div", { class: "fw-events" }, h("table", { class: "list" }, h("tr", {}, h("th", {}, "When"), h("th", {}, "Address"), h("th", {}, "What"), h("th", {}, "")),
+        f.events.map((e) => h("tr", {},
+          h("td", { class: "nowrap" }, when(e.at), h("div", { class: "muted tiny" }, e.ref)),
+          h("td", { class: "mono" }, e.ip),
+          h("td", {}, h("strong", {}, wafRule(e.rule)), " ", actionPill(e.action), h("div", { class: "muted small fw-detail", title: `${e.detail || ""}\n${e.agent || ""}` }, `${e.method} ${e.target}`, e.detail ? ` · ${e.detail}` : "")),
+          h("td", {}, !f.blocked.some((b) => b.ip === e.ip) && e.ip !== f.your_ip && h("button", { class: "btn btn-sm", onclick: quickBlock(e.ip) }, "Block")))))) : h("p", { class: "muted" }, "Nothing yet.")),
+    h("section", {}, h("h3", {}, "Settings"),
+      h("p", { class: "notice info" }, "Your address now: ", h("strong", { class: "mono" }, f.your_ip), ". It's never blocked while you're signed in as an administrator, and neither are the trusted networks (Settings → Security)."),
+      formFor([
+        h("div", { class: "field" }, "Mode",
+          radio("mode", "block", "On", "Refuses attacks and blocks addresses that keep at it. Recommended.", s.mode === "block"),
+          radio("mode", "monitor", "Monitoring only", "Logs what it would refuse and block, without doing it: to try it out first.", s.mode === "monitor"),
+          radio("mode", "off", "Off", null, s.mode === "off")),
+        h("label", { class: "field short-field" }, "Requests a minute from one address", h("select", { name: "sensitivity" },
+          h("option", { value: "normal", selected: s.sensitivity === "normal" }, "Normal: 300 (60 before signing in)"), h("option", { value: "strict", selected: s.sensitivity === "strict" }, "Strict: 150 (25 before signing in)"))),
+        h("div", { class: "field" }, "Visitors reach the webmail",
+          h("small", {}, "Behind Cloudflare or another proxy, every request comes from the proxy: the firewall needs the visitor's own address, from the proxy's header."),
+          ...[["direct", "Directly", null], ["cloudflare", "Through Cloudflare", "Its CF-Connecting-IP header, only from Cloudflare's own addresses."], ["custom", "Through another proxy or load balancer", "Its X-Forwarded-For header."]]
+            .map(([v, l, hint]) => { const r = radio("proxy", v, l, hint, s.proxy === v); r.querySelector("input").addEventListener("change", () => { proxyRanges.hidden = v !== "custom"; }); return r; }),
+          proxyRanges),
+        h("label", { class: "field" }, "Always allow", h("small", {}, "Never refused or blocked: your office, your monitoring service. One address or range a line."), ranges("allow", s.allow, "203.0.113.0/24  # office")),
+        h("label", { class: "field" }, "Always block", h("small", {}, "Refused every time."), ranges("deny", s.deny, "")),
+        confirmPw()],
+      "Save", async (v) => {
+        await api("admin/firewall", { method: "POST", body: { mode: v.mode, sensitivity: v.sensitivity, proxy: v.proxy, proxy_ranges: v.proxy_ranges || "", allow: v.allow, deny: v.deny, password: v.password } });
+        toast("Saved."); openSettings("admin-firewall");
+      }),
+      h("p", { class: "muted small" }, "Locked yourself out? On the server: ", h("code", {}, "php security-reset.php"), " clears its blocks and block list.")));
 }
 
 const SETTINGS = {
@@ -2716,6 +2790,7 @@ const SETTINGS = {
     window.Notifications?.settings?.() || null);
   },
   async "admin-security"() { return securityPolicy(); },
+  async "admin-firewall"() { return firewallSettings(); },
   async "admin-users"() {
     const [{ users }, { mailboxes }] = await Promise.all([api("admin/users"), api("admin/mailboxes")]);
     const boxes = (selected) => h("div", {}, mailboxes.map((m) => h("label", { class: "check" }, h("input", { type: "checkbox", name: `mb_${m.id}`, checked: selected.includes(m.id) }), m.address)));

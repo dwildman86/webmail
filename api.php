@@ -27,6 +27,10 @@ try {
     // Sessions live in the database (see Sessions), so it's brought up to date first.
     $sessionApp = App::get();
     \Webmail\Schema::upgrade($sessionApp->db);
+    // The firewall looks first (Settings → Firewall). A sign-in's email and code are checked too; never a password.
+    $signIn = in_array($_GET['a'] ?? '', ['login', 'mfa/verify'], true) && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST'
+        ? array_intersect_key(json_decode((string) file_get_contents('php://input'), true) ?: [], ['email' => 1, 'code' => 1]) : [];
+    (new \Webmail\Waf($sessionApp))->guard('api', $signIn);
     Auth::startSession($base, $sessionApp);
 } catch (\Throwable) {
     Auth::startSession($base); // the database isn't reachable: the request below says so
@@ -354,6 +358,27 @@ try {
                 $in = Http::body();
                 $auth->confirm($me['id'], $in);
                 Http::json($security->save($me, $in, Http::ip()));
+            case 'GET admin/firewall':
+                Http::json((new \Webmail\Waf($app))->status());
+            case 'POST admin/firewall':
+                $in = Http::body();
+                $auth->confirm($me['id'], $in);
+                (new \Webmail\Waf($app))->save($in, Http::ip());
+                Http::json((new \Webmail\Waf($app))->status());
+            case 'POST admin/firewall/block':
+                $in = Http::body();
+                $ip = trim((string) ($in['ip'] ?? ''));
+                if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+                    throw new HttpError(422, 'Give an IP address', 'bad_ip');
+                }
+                if ($ip === Http::ip()) {
+                    throw new HttpError(422, "That's your own address now: you'd block yourself", 'locks_you_out');
+                }
+                $hours = max(1, min(24 * 365, (int) ($in['hours'] ?? 24)));
+                Http::json((new \Webmail\Waf($app))->block($ip, $hours * 3600, 'Blocked by ' . ($me['name'] ?: $me['email']), true));
+            case 'POST admin/firewall/unblock':
+                (new \Webmail\Waf($app))->unblock((string) (Http::body()['ip'] ?? ''));
+                Http::json(['ok' => true]);
             case 'GET admin/users/sessions':
                 Http::json(['sessions' => $security->sessions($int('id'))]);
             case 'POST admin/users/sessions/revoke':
@@ -373,6 +398,17 @@ try {
     }
     throw new HttpError(404, 'Unknown action', 'not_found');
 } catch (HttpError $e) {
+    // Failed sign-ins, guessed actions and forged requests count against the address (the firewall blocks it at 15).
+    $points = ['invalid_login' => 1, 'invalid_code' => 1, 'unknown_passkey' => 1, 'invalid_passkey' => 2, 'cloned_passkey' => 3, 'rate_limited' => 3, 'csrf' => 1,
+        'unauthorized' => 1][$e->errorCode] ?? ($e->status === 404 && $e->getMessage() === 'Unknown action' ? 1 : 0);
+    if ($points) {
+        try {
+            $waf = new \Webmail\Waf(App::get());
+            $waf->penalise(Http::ip(), 'failed_' . $e->errorCode, $points, $waf->request('api'), $e->getMessage());
+        } catch (\Throwable) {
+            // The firewall can't count it: the answer still goes.
+        }
+    }
     Http::json(['error' => $e->errorCode, 'message' => $e->getMessage()] + $e->data, $e->status);
 } catch (\Throwable $e) {
     error_log('webmail api: ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());

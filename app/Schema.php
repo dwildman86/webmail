@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['waf_events', 'waf_rate', 'waf_ips', 'message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -441,6 +441,42 @@ final class Schema
                     PRIMARY KEY (address_bidx, message_id),
                     KEY party_message (message_id),
                     FOREIGN KEY (message_id) REFERENCES {messages}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // The firewall (Waf): each address's suspicion score and block, requests counted per minute, and what it saw.
+            12 => [
+                "CREATE TABLE IF NOT EXISTS {waf_ips} (
+                    ip VARCHAR(45) NOT NULL PRIMARY KEY,
+                    score INT UNSIGNED NOT NULL DEFAULT 0,
+                    score_since DATETIME NOT NULL,
+                    blocked_until DATETIME NULL,
+                    blocks INT UNSIGNED NOT NULL DEFAULT 0,
+                    last_block_at DATETIME NULL,
+                    reason VARCHAR(200) NULL,
+                    manual TINYINT(1) NOT NULL DEFAULT 0,
+                    KEY blocked (blocked_until)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {waf_rate} (
+                    ip VARCHAR(45) NOT NULL,
+                    minute INT UNSIGNED NOT NULL,
+                    kind VARCHAR(16) NOT NULL,
+                    n INT UNSIGNED NOT NULL DEFAULT 0,
+                    PRIMARY KEY (ip, kind, minute),
+                    KEY rate_age (minute)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {waf_events} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    at DATETIME NOT NULL,
+                    ip VARCHAR(45) NOT NULL,
+                    rule VARCHAR(32) NOT NULL,
+                    action ENUM('blocked','logged','limited','banned') NOT NULL,
+                    score SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+                    method VARCHAR(10) NOT NULL,
+                    target VARCHAR(200) NOT NULL,
+                    detail VARCHAR(300) NULL,
+                    agent VARCHAR(200) NULL,
+                    KEY event_age (at),
+                    KEY event_ip (ip)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

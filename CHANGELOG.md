@@ -3,6 +3,12 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.16.0
+- **Firewall** (administrators: Settings → Firewall): the webmail checks every request before answering it, for hosting without a firewall of its own. Attacks in addresses and headers (SQL injection, scripts, reading server files, running commands, Log4Shell, Shellshock) are refused; attack tools, made-up requests and other websites posting here are too. Wrong passwords and floods of requests add up, and an address that keeps at it is blocked for 15 minutes, then an hour, then a day. It never reads the email people write or receive, or what they search for.
+- See what it's refused and blocked, unblock or block an address, keep lists of addresses to always allow and always block, and try it in monitoring mode first. Administrators' own addresses and the trusted networks are never blocked.
+- **Behind Cloudflare or another proxy**: say so under Settings → Firewall, and the firewall, trusted networks and the list of where people are signed in all see each visitor's own address.
+- `php security-reset.php` also clears the firewall's blocks.
+
 ## 1.15.0
 - **Forgot the attachment?** If your email says "see attached", "I've included…", "please find enclosed" and the like but nothing is attached, Send asks first: attach a file, or send it anyway. Only what you wrote counts, not the email you're replying to.
 - **Cc that should be Bcc?** When people outside your organisation who may not know each other (different companies, or personal addresses like Gmail) are in Cc, Send asks whether to move them to Bcc, so they don't see each other's addresses. Not asked for colleagues, or on a reply to people already in the conversation.

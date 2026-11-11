@@ -52,7 +52,8 @@ final class Due
             || (bool) $this->app->db->value("SELECT 1 FROM {scheduled} WHERE (status = 'waiting' AND send_at <= ?) OR (status = 'sending' AND claimed_at < ?) LIMIT 1",
                 [$now, gmdate('Y-m-d H:i:s', time() - 600)])
             || (new Calendar($this->app))->remindersDue()
-            || (bool) $this->app->db->value('SELECT 1 FROM {messages} WHERE parties_indexed = 0 LIMIT 1');
+            || (bool) $this->app->db->value('SELECT 1 FROM {messages} WHERE parties_indexed = 0 LIMIT 1')
+            || (bool) $this->app->db->value('SELECT 1 FROM {waf_rate} WHERE minute < ? LIMIT 1', [intdiv(time(), 60) - 60]);
     }
 
     /** Do what's due. Returns ['woken' => n, 'sent' => n], or null when another request is doing it. */
@@ -79,6 +80,7 @@ final class Due
             $reminded = ($this->calendar ?? new Calendar($this->app))->sendReminders();
             // Email from before 1.14.0: who it's from and to, for the customer panel (a batch at a time).
             (new Mailstore($this->app))->indexOldParties(300);
+            (new Waf($this->app))->cleanup();
             return ['woken' => count($woken), 'sent' => $sent, 'reminded' => $reminded];
         } finally {
             $this->app->db->value('SELECT RELEASE_LOCK(?)', [$lock]);

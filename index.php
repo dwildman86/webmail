@@ -12,6 +12,11 @@ if (!Config::installed()) {
     exit;
 }
 $config = Config::load();
+try {
+    (new \Webmail\Waf(\Webmail\App::get()))->guard('page');
+} catch (\Throwable) {
+    // The database isn't reachable: the page loads, and says so.
+}
 $name = htmlspecialchars((string) $config->get('app_name', 'Webmail'), ENT_QUOTES | ENT_HTML5, 'UTF-8');
 $v = \Webmail\App::VERSION;
 Http::securityHeaders();
