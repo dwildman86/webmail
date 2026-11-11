@@ -8,8 +8,11 @@ final class Prefs
 {
     /** Seconds an email waits after Send, so it can be taken back. 0 sends straight away. */
     public const UNDO_SEND = [0, 5, 10, 20, 30];
-    /** attach_check: a reminder when the email mentions an attachment and has none. cc_check: Cc that should be Bcc. */
-    private const DEFAULTS = ['undo_send' => 10, 'attach_check' => true, 'cc_check' => true];
+    /**
+     * attach_check: a reminder when the email mentions an attachment and has none. cc_check: Cc that should be Bcc.
+     * app_prompts: suggest installing the app and turning on notifications, on devices that haven't.
+     */
+    private const DEFAULTS = ['undo_send' => 10, 'attach_check' => true, 'cc_check' => true, 'app_prompts' => true];
 
     public function __construct(private App $app)
     {
@@ -30,7 +33,7 @@ final class Prefs
             }
             $prefs['undo_send'] = (int) $in['undo_send'];
         }
-        foreach (['attach_check', 'cc_check'] as $k) {
+        foreach (['attach_check', 'cc_check', 'app_prompts'] as $k) {
             if (array_key_exists($k, $in)) {
                 $prefs[$k] = (bool) $in[$k];
             }

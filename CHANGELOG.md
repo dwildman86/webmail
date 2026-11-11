@@ -3,6 +3,11 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.17.0
+- **Install the app, turn on notifications**: a few seconds after the inbox opens, a small card in the corner suggests what this device hasn't set up yet. On a computer, notifications for new email come first, then installing the webmail in its own window (Chrome and Edge). On a phone, the app comes first: Install on Android, and on iPhone and iPad, the steps to add it to the Home Screen, which iOS needs before it allows notifications.
+- Only one card at a time, never over an open email you're writing, and nothing at all where notifications are blocked. **Not now** waits 3 days, then 2 weeks, then a month, and after that it stops asking on that device.
+- Settings → Sign-in & alerts → Use it like an app: install from there any time, or turn off **Suggest the app and notifications** for all your devices.
+
 ## 1.16.0
 - **Firewall** (administrators: Settings → Firewall): the webmail checks every request before answering it, for hosting without a firewall of its own. Attacks in addresses and headers (SQL injection, scripts, reading server files, running commands, Log4Shell, Shellshock) are refused; attack tools, made-up requests and other websites posting here are too. Wrong passwords and floods of requests add up, and an address that keeps at it is blocked for 15 minutes, then an hour, then a day. It never reads the email people write or receive, or what they search for.
 - See what it's refused and blocked, unblock or block an address, keep lists of addresses to always allow and always block, and try it in monitoring mode first. Administrators' own addresses and the trusted networks are never blocked.

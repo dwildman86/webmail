@@ -169,6 +169,7 @@ window.Notifications = {
   afterSignIn(session) {
     vapidKey = session.app?.vapid_public_key || null;
     this.followHash();
+    window.AppPrompt?.schedule();
   },
 
   /**
@@ -238,6 +239,154 @@ window.Notifications = {
     };
     box.append(state, actions);
     render().catch((err) => { state.textContent = err.message; });
+    return box;
+  },
+};
+
+// ------------------------------------------------------------------------------------- suggesting the app and notifications
+// Chrome, Edge and Android offer installing through their own event, saved for the Install button. Safari on iPhone and iPad
+// has no such event: there, the suggestion shows how to add the webmail to the Home Screen, which iOS needs for notifications.
+let installEvent = null;
+addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvent = e; });
+addEventListener("appinstalled", () => { installEvent = null; window.AppPrompt?.hide(); });
+
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const appleMobile = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const onPhone = () => matchMedia("(max-width: 900px)").matches;
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private browsing: it just asks again */ } },
+};
+const DAY = 86400000;
+/** "Not now" waits longer each time: 3 days, then 2 weeks, then a month, and after the third it stops asking on this device. */
+const SNOOZE_DAYS = [3, 14, 30];
+
+window.AppPrompt = {
+  el: null,
+
+  /** Called once the inbox is on screen. Waits a few seconds, so it never greets someone the moment they sign in. */
+  schedule(delay = 6000) {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.show().catch(() => {}), delay);
+  },
+
+  snoozed(kind) {
+    const s = store.get(`wm.prompt.${kind}`);
+    return !!s && (s.count >= SNOOZE_DAYS.length || Date.now() < s.until);
+  },
+
+  canInstall() { return !standalone() && (!!installEvent || appleMobile()); },
+
+  async wantsNotifications() {
+    if (!window.Notifications?.available() || !vapidKey || Notification.permission === "denied") return false;
+    return !(await window.Notifications.subscription());
+  },
+
+  /** What to suggest on this device now, if anything. On a phone the app comes first (iOS needs it for notifications). */
+  async next() {
+    if (window.Webmail?.state?.prefs?.app_prompts === false) return null;
+    const install = this.canInstall() && !this.snoozed("install");
+    const notify = !this.snoozed("notify") && await this.wantsNotifications();
+    if (onPhone() || appleMobile()) return install ? "install" : notify ? "notify" : null;
+    return notify ? "notify" : install ? "install" : null;
+  },
+
+  async show() {
+    if (this.el || document.hidden || document.querySelector(".overlay")) { if (!this.el) this.schedule(20000); return; }
+    const kind = await this.next();
+    if (!kind) return;
+    const { h, icon, state } = window.Webmail;
+    const name = state.appInfo?.name || "the webmail";
+    const ios = appleMobile() && !installEvent;
+    const copy = kind === "notify"
+      ? { icon: "bell", title: "Know when email arrives", text: "Get a notification for new email in your inbox, even when the webmail is closed. You can turn it off any time in Settings.", go: "Turn on" }
+      : ios
+        ? { icon: "homeAdd", title: `Add ${name} to your Home Screen`, text: "It opens like an app, full screen, and it's how iPhone and iPad allow notifications for new email.", go: "Show me how" }
+        : { icon: "download", title: `Install ${name}`, text: onPhone() ? "Open it from your home screen like an app, with notifications for new email." : "Open it in its own window, from your dock or taskbar, with notifications for new email.", go: "Install" };
+    const body = h("div", { class: "app-prompt-body" }, h("strong", {}, copy.title), h("p", {}, copy.text));
+    const actions = h("div", { class: "app-prompt-actions" },
+      h("button", { class: "btn btn-primary", onclick: () => this.accept(kind, body, actions) }, copy.go),
+      h("button", { class: "btn", onclick: () => this.notNow(kind) }, "Not now"));
+    body.append(actions);
+    this.el = h("aside", { class: "app-prompt", role: "dialog", "aria-label": copy.title },
+      h("span", { class: "app-prompt-icon" }, icon(copy.icon)), body,
+      h("button", { class: "icon-btn app-prompt-close", title: "Not now", "aria-label": "Not now", onclick: () => this.notNow(kind) }, icon("close")));
+    document.body.append(this.el);
+    requestAnimationFrame(() => this.el?.classList.add("in"));
+  },
+
+  hide() {
+    const el = this.el;
+    this.el = null;
+    if (!el) return;
+    el.classList.remove("in");
+    setTimeout(() => el.remove(), 250);
+  },
+
+  notNow(kind) {
+    const s = store.get(`wm.prompt.${kind}`) || { count: 0 };
+    s.until = Date.now() + SNOOZE_DAYS[Math.min(s.count, SNOOZE_DAYS.length - 1)] * DAY;
+    s.count += 1;
+    store.set(`wm.prompt.${kind}`, s);
+    this.hide();
+  },
+
+  async accept(kind, body, actions) {
+    const { toast } = window.Webmail;
+    if (kind === "notify") {
+      this.hide();
+      try { await window.Notifications.enable(); toast("Notifications are on for this device."); }
+      catch (err) { toast(err.message); }
+      return;
+    }
+    if (installEvent) {
+      const ev = installEvent;
+      installEvent = null; // each one can only be used once
+      await ev.prompt();
+      const { outcome } = await ev.userChoice;
+      if (outcome === "accepted") this.hide(); else this.notNow("install");
+      return;
+    }
+    // iPhone and iPad: the steps, in place of the buttons.
+    actions.replaceWith(this.iosSteps(() => this.notNow("install")));
+  },
+
+  /** How to add the webmail to the Home Screen in Safari (and Chrome, which has the same Share menu on iOS). */
+  iosSteps(done) {
+    const { h, icon, state } = window.Webmail;
+    const name = state.appInfo?.name || "the webmail";
+    return h("div", { class: "ios-steps" },
+      h("ol", {},
+        h("li", {}, "Tap ", h("span", { class: "ios-key" }, icon("share"), "Share"), " in the toolbar (at the top in Chrome)."),
+        h("li", {}, "Scroll down and tap ", h("span", { class: "ios-key" }, icon("homeAdd"), "Add to Home Screen"), ", then Add."),
+        h("li", {}, `Open ${name} from your Home Screen, sign in, and turn on notifications when it asks.`)),
+      done && h("button", { class: "btn", onclick: done }, "Done"));
+  },
+
+  /** The "Use it like an app" section in Settings, with the same suggestions and the switch to stop them. */
+  settings() {
+    const { h, api, toast, state } = window.Webmail;
+    const box = h("section", {}, h("h3", {}, "Use it like an app"));
+    if (standalone()) box.append(h("p", { class: "muted" }, "You're using the installed app on this device."));
+    else if (installEvent) {
+      box.append(h("p", { class: "muted" }, "Install the webmail to open it in its own window or from your home screen, like an app."),
+        h("div", { class: "row" }, h("button", { class: "btn btn-primary", onclick: async () => {
+          const ev = installEvent;
+          if (!ev) return toast("Use your browser's menu to install it.");
+          installEvent = null;
+          await ev.prompt();
+          if ((await ev.userChoice).outcome === "accepted") toast("Installed.");
+        } }, "Install")));
+    } else if (appleMobile()) box.append(h("p", { class: "muted" }, "Add the webmail to your Home Screen: it opens like an app, and it's how iPhone and iPad allow notifications."), this.iosSteps());
+    else box.append(h("p", { class: "muted" }, "If your browser can install web apps, its menu (or an icon in the address bar) offers to install the webmail."));
+    box.append(h("label", { class: "check address" }, h("input", { type: "checkbox", checked: state.prefs?.app_prompts !== false, onchange: async (e) => {
+      try {
+        state.prefs = await api("prefs", { method: "POST", body: { app_prompts: e.target.checked } });
+        if (!e.target.checked) this.hide();
+        toast(e.target.checked ? "We'll suggest the app and notifications where they're not set up." : "No more suggestions.");
+      } catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
+    } }), h("span", {}, h("strong", {}, "Suggest the app and notifications"),
+      h("small", { class: "muted" }, "Now and then, on a device where the app isn't installed or notifications aren't on. It's for all your devices."))));
     return box;
   },
 };

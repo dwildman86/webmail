@@ -815,3 +815,25 @@ table.list .pill { white-space: nowrap; }
 .pill.fw-mode-monitor { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .pill.fw-mode-off { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
 @media (max-width: 900px) { .fw-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .fw-detail { max-width: 180px; } }
+
+/* Suggesting the app and notifications: a card in the corner, never in the way of reading or writing. */
+.app-prompt { position: fixed; right: 24px; bottom: 24px; z-index: 45; width: min(380px, calc(100vw - 24px)); display: flex; gap: 12px; align-items: flex-start;
+  padding: 16px 12px 16px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+  opacity: 0; transform: translateY(12px); transition: opacity .2s, transform .2s; }
+.app-prompt.in { opacity: 1; transform: none; }
+.app-prompt-icon { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); }
+.app-prompt-icon svg { width: 22px; height: 22px; }
+.app-prompt-body { flex: 1; min-width: 0; }
+.app-prompt-body strong { display: block; font-size: 15px; margin-top: 2px; }
+.app-prompt-body p { margin: 4px 0 12px; color: var(--muted); font-size: 14px; line-height: 1.45; }
+.app-prompt-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.app-prompt-close { flex: none; margin: -6px -2px 0 0; }
+.ios-steps ol { margin: 0 0 12px; padding-left: 20px; font-size: 14px; line-height: 1.55; }
+.ios-steps li + li { margin-top: 6px; }
+.ios-key { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); font-weight: 600; white-space: nowrap; }
+.ios-key svg { width: 15px; height: 15px; color: var(--accent); }
+@media (max-width: 900px) {
+  .app-prompt { left: 12px; right: 12px; width: auto; bottom: calc(86px + env(safe-area-inset-bottom)); }
+  body:has(.shell.reading) .app-prompt { bottom: calc(16px + env(safe-area-inset-bottom)); }
+}
+@media (prefers-reduced-motion: reduce) { .app-prompt { transition: none; } }

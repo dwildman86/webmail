@@ -39,6 +39,8 @@ const ICONS = {
   back: "M15 5l-7 7 7 7",
   menu: "M4 7h16 M4 12h16 M4 17h16",
   close: "M6 6l12 12 M18 6L6 18",
+  share: "M12 3v12 M8 7l4-4 4 4 M8 11H6v10h12V11h-2",
+  homeAdd: "M5 4h14v16H5z M12 8v8 M8 12h8",
   clip: "M16 7l-7.5 7.5a2 2 0 0 0 3 3L19 10a4 4 0 0 0-6-6l-7.5 7.5a6 6 0 0 0 8.5 8.5L20 14",
   unread: "M3 7l9 6 9-6 M3 6h18v12H3z",
   refresh: "M4 12a8 8 0 0 1 14-5.3L20 9 M20 4v5h-5 M20 12a8 8 0 0 1-14 5.3L4 15 M4 20v-5h5",
@@ -2787,7 +2789,7 @@ const SETTINGS = {
     return h("div", {}, sessionList(), !state.user.passkeys_only ? await twoStepSettings() : h("section", {}, h("h3", {}, "Signing in"),
       h("p", { class: "muted" }, "Your organisation signs in with passkeys only: no password. Add one for each device you use (or use one that syncs, like iCloud Keychain or Google Password Manager).")),
     window.Passkeys?.settings?.() || h("section", {}, h("h3", {}, "Passkeys"), h("p", { class: "muted" }, "Not available in this browser.")),
-    window.Notifications?.settings?.() || null);
+    window.Notifications?.settings?.() || null, window.AppPrompt?.settings?.() || null);
   },
   async "admin-security"() { return securityPolicy(); },
   async "admin-firewall"() { return firewallSettings(); },
