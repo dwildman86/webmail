@@ -302,9 +302,11 @@ final class Team
             if (count($members) < 2) {
                 continue;
             }
-            $in = implode(', ', array_fill(0, count($keys), '?'));
+            // One placeholder per conversation (two emails of one conversation share it).
+            $unique = array_values(array_unique($keys));
+            $in = implode(', ', array_fill(0, count($unique), '?'));
             $states = [];
-            foreach ($this->app->db->all("SELECT thread_key, assignee_id, status FROM {thread_state} WHERE mailbox_id = ? AND thread_key IN ($in)", array_merge([(int) $mailboxId], array_values(array_unique($keys)))) as $r) {
+            foreach ($this->app->db->all("SELECT thread_key, assignee_id, status FROM {thread_state} WHERE mailbox_id = ? AND thread_key IN ($in)", array_merge([(int) $mailboxId], $unique)) as $r) {
                 $states[$r['thread_key']] = $r;
             }
             foreach ($keys as $id => $key) {

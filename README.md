@@ -111,8 +111,9 @@ marks.
   - While writing, the signature shows under the message, with a switch to leave it out of that email.
   - Signatures from before 1.5.0 move to GhostParse by themselves, unless the address already has one there. Replies keep the thread together in the recipient's mail app too.
 - **Contacts**: two address books. **My contacts** is private to each person. **Shared** is seen by everyone, and administrators keep it up to date. Add contacts by hand, with **Add to contacts** on any email, or by importing a **.vcf** or **.csv** file from Gmail, Outlook, iPhone or Android. Importing fills in missing details for contacts you already have and never overwrites them. Export either book as a .vcf file. When you write an email, names and addresses are suggested from both books, then from people you've written to before.
+- **Customer panel**: the person button above an email (or `i`) shows who it's with: every conversation with them in the mailboxes you can read, with where each is up to and who has it, how many there have been and since when, their address book entry, and the fields GhostParse's parsers found in their email (an order number, a customer id, a plan), newest first. Click a conversation to open it. To get fields, give the address a parser in GhostParse (Parsers).
 - **Calendar**: see *Calendar* below.
-- **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `b` snooze, `l` labels, `Esc` close.
+- **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `b` snooze, `l` labels, `i` the customer panel, `Esc` close.
 
 ### Calendar
 
@@ -152,7 +153,17 @@ part-way is never sent twice: it's marked *not sent*, to check in Sent first.
 - **Notification buttons**: new-mail notifications have **Mark as read** and **Reply**, and **Archive** where the device shows a third button. They work without opening the webmail. On Chrome and Edge (Windows, Mac, Linux, Android) you can type the reply in the notification and it's sent from the mailbox the email came to, in the same thread; elsewhere Reply opens the reply window. If a reply typed in a notification can't be sent (no connection, or the notification is more than 7 days old), a notification says so, and tapping it opens the reply with your text in it. A notification's buttons only act on its own email, for its own person, and stop working when that person's password changes. iPhone and iPad don't show notification buttons: tapping opens the email.
 - **On your phone**: quick buttons along the bottom: Inbox (with its unread count), Calendar, Compose (a new event, in the calendar), Contacts, and More for every other folder and Settings. Tap the open folder again to go back to the top.
 - **Swipe on your phone**: swipe an email right to delete it, or left to archive it, with Undo.
+- **Where you're signed in**: **Settings → Sign-in & alerts** lists each browser and installed app you're signed in on, where from and when it was last used. **Sign out** one you don't recognise or have lost (its notifications stop too), or everywhere else. Administrators can do the same for anyone, under **Users → Devices**.
 - **Offline**: the app opens without a connection and shows the mail you've already opened on that device. Signing out clears it.
+
+## Security settings (administrators)
+
+**Settings → Security**:
+
+- **Trusted networks**: *Administration only from* your office's and VPN's addresses (elsewhere, administrators can read and send their email but not change settings or users), and *Everyone only from* (signing in and using the webmail at all). One IP address or range a line: `203.0.113.7`, `203.0.113.0/24`, `2001:db8::/32`. A person can have their own instead, under **Users → Edit** (*Only from these networks*). Someone signed in who leaves them is signed out at their next click, with the reason. The page shows your address now: a setting that would lock you out isn't saved. Behind a proxy or Cloudflare, the webmail sees the proxy's address, so limits by network won't work there.
+- **Passkeys only**: for administrators, or everyone. Nobody it applies to can sign in with a password; they use a passkey (Face ID, Touch ID, Windows Hello, a fingerprint, or a security key). Someone without one yet signs in with their password and second step once and must add a passkey before anything else. Changes that ask for your password ask for your passkey instead. You need a passkey yourself to turn it on, and the webmail on https://. Lost passkey: **Users → Edit → Reset two-step verification**, and they add a new one at their next sign-in.
+
+Saving either asks for your password (or passkey). Locked out anyway (the office's address changed, say)? On the server, in the webmail's folder: `php security-reset.php` turns both off (`--user=you@example.com` also clears that person's own networks).
 
 ## Data requests (GDPR)
 
@@ -250,7 +261,7 @@ Apache and LiteSpeed use the included `.htaccess` files. On nginx, add this to t
 
 ```nginx
 location ~ ^/mail/(app|storage|tests|vendor)/ { deny all; }
-location ~ ^/mail/(config\.php|config\.php\.tmp|setup-preset\.php|install-cli\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ { deny all; }
+location ~ ^/mail/(config\.php|config\.php\.tmp|setup-preset\.php|install-cli\.php|security-reset\.php|\.user\.ini|composer\.(json|lock)|phpunit\.xml|README\.md|build\.sh)$ { deny all; }
 location = /mail/sw.js { add_header Cache-Control "no-cache"; }
 client_max_body_size 48m;
 ```

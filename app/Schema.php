@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -421,6 +421,26 @@ final class Schema
                     FOREIGN KEY (calendar_id) REFERENCES {cal_calendars}(id) ON DELETE CASCADE,
                     FOREIGN KEY (created_by) REFERENCES {users}(id) ON DELETE SET NULL,
                     FOREIGN KEY (updated_by) REFERENCES {users}(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Security and the customer panel. Sessions say whose they are and where from (for the list of devices
+            // signed in, and revoking one); a person can be limited to some IP addresses; notifications remember the
+            // session that turned them on (revoking it stops them). Each email's people are indexed (blind) to find
+            // everything from one customer, and the fields GhostParse's parser pulled out of it are kept.
+            11 => [
+                "ALTER TABLE {sessions} ADD COLUMN user_id INT UNSIGNED NULL, ADD COLUMN handle CHAR(32) NULL, ADD COLUMN ip VARCHAR(45) NULL,
+                    ADD COLUMN agent_enc TEXT NULL, ADD COLUMN app TINYINT(1) NOT NULL DEFAULT 0, ADD COLUMN created_at INT UNSIGNED NULL,
+                    ADD KEY session_user (user_id), ADD UNIQUE KEY session_handle (handle)",
+                "ALTER TABLE {users} ADD COLUMN allowed_ips_enc TEXT NULL",
+                "ALTER TABLE {push_subscriptions} ADD COLUMN session_hash CHAR(64) NULL, ADD KEY push_session (session_hash)",
+                "ALTER TABLE {messages} ADD COLUMN extracted_enc MEDIUMTEXT NULL, ADD COLUMN parties_indexed TINYINT(1) NOT NULL DEFAULT 0,
+                    ADD KEY parties_todo (parties_indexed)",
+                "CREATE TABLE IF NOT EXISTS {message_parties} (
+                    address_bidx BINARY(16) NOT NULL,
+                    message_id INT UNSIGNED NOT NULL,
+                    PRIMARY KEY (address_bidx, message_id),
+                    KEY party_message (message_id),
+                    FOREIGN KEY (message_id) REFERENCES {messages}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

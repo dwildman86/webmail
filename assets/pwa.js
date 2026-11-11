@@ -107,6 +107,16 @@ window.Passkeys = {
     return done;
   },
 
+  /** A passkey's answer to a new challenge, to confirm a sensitive change (passkeys only: no password). */
+  async assertion() {
+    const { api } = window.Webmail;
+    const o = await api("passkey/login/options");
+    const cred = await navigator.credentials.get({ publicKey: { challenge: b64u.decode(o.challenge), rpId: o.rpId, userVerification: o.userVerification, timeout: o.timeout } });
+    const r = cred.response;
+    return { id: b64u.encode(cred.rawId), clientDataJSON: b64u.encode(r.clientDataJSON), authenticatorData: b64u.encode(r.authenticatorData),
+      signature: b64u.encode(r.signature), userHandle: r.userHandle ? b64u.encode(r.userHandle) : null };
+  },
+
   async register(name) {
     const { api } = window.Webmail;
     const o = await api("passkey/register/options");

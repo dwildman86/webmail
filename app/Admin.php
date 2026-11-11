@@ -66,7 +66,7 @@ final class Admin
             case 'GET admin/update':
                 Http::json((new Updater($this->app))->check(($_GET['refresh'] ?? '') === '1'));
             case 'POST admin/update':
-                (new Auth($this->app))->confirmPassword($me['id'], (string) ($in['password'] ?? ''));
+                (new Auth($this->app))->confirm($me['id'], $in);
                 Http::json((new Updater($this->app))->install());
         }
         throw new HttpError(404, 'Unknown action', 'not_found');
@@ -80,7 +80,10 @@ final class Admin
             $out[] = ['id' => (int) $r['id'], 'email' => $c->decrypt($r['email_enc'], 'users.email'), 'name' => $c->decrypt($r['name_enc'], 'users.name') ?? '',
                 'role' => $r['role'], 'disabled' => (bool) $r['disabled'], 'created_at' => $r['created_at'], 'last_login_at' => $r['last_login_at'],
                 'mailbox_ids' => array_map('intval', array_column($this->app->db->all('SELECT mailbox_id FROM {user_mailboxes} WHERE user_id = ?', [$r['id']]), 'mailbox_id')),
-                'two_step' => (new Mfa($this->app))->configured((int) $r['id'])];
+                'two_step' => (new Mfa($this->app))->configured((int) $r['id']),
+                'passkeys' => (int) $this->app->db->value('SELECT COUNT(*) FROM {passkeys} WHERE user_id = ?', [$r['id']]),
+                'sessions' => (int) $this->app->db->value('SELECT COUNT(*) FROM {sessions} WHERE user_id = ? AND updated_at >= ?', [$r['id'], time() - 30 * 86400]),
+                'allowed_ips' => (new Security($this->app))->userRanges((int) $r['id'])];
         }
         return $out;
     }
@@ -107,6 +110,14 @@ final class Admin
             Auth::checkPassword((string) $in['password']);
             // A new password signs them out everywhere.
             $db->run('UPDATE {users} SET password_hash = ?, session_version = session_version + 1 WHERE id = ?', [Auth::hash((string) $in['password']), $id]);
+        }
+        if (array_key_exists('allowed_ips', $in)) {
+            $ranges = Security::ranges($in['allowed_ips']);
+            if ($id === $me['id'] && $ranges && !Security::inRanges(Http::ip(), $ranges)) {
+                throw new HttpError(422, 'Your address now (' . Http::ip() . ") isn't in those ranges: you'd be signed out. Add it first.", 'locks_you_out');
+            }
+            (new Security($this->app))->setUserRanges($id, $ranges);
+            // Signed in from elsewhere: those sessions end at their next request (Auth checks every time).
         }
         if (isset($in['mailbox_ids'])) {
             $db->run('DELETE FROM {user_mailboxes} WHERE user_id = ?', [$id]);

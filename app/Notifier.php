@@ -72,9 +72,10 @@ final class Notifier
         $c = $this->app->crypto;
         $data = $c->encryptJson(['endpoint' => $endpoint, 'p256dh' => $sub['keys']['p256dh'], 'auth' => $sub['keys']['auth']], 'push.subscription');
         $this->app->db->run(
-            'INSERT INTO {push_subscriptions} (user_id, endpoint_bidx, subscription_enc, created_at) VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), subscription_enc = VALUES(subscription_enc)',
-            [$userId, $c->blindIndex($endpoint, 'push.endpoint'), $data, App::now()],
+            'INSERT INTO {push_subscriptions} (user_id, endpoint_bidx, subscription_enc, created_at, session_hash) VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), subscription_enc = VALUES(subscription_enc), session_hash = VALUES(session_hash)',
+            // The session that turned them on: signing that device out (Settings → Sign-in & alerts) stops them.
+            [$userId, $c->blindIndex($endpoint, 'push.endpoint'), $data, App::now(), session_status() === PHP_SESSION_ACTIVE ? hash('sha256', session_id()) : null],
         );
     }
 

@@ -95,7 +95,7 @@ final class Auth
                 throw new HttpError(429, 'Too many sign-in attempts. Wait 15 minutes and try again.', 'rate_limited');
             }
         }
-        $user = $db->one('SELECT id, password_hash, disabled FROM {users} WHERE email_bidx = ?', [$this->emailIndex($email)]);
+        $user = $db->one('SELECT id, password_hash, disabled, role FROM {users} WHERE email_bidx = ?', [$this->emailIndex($email)]);
         // Check a hash even when there's no such user, so the timing doesn't reveal which emails exist.
         $ok = password_verify($password, $user['password_hash'] ?? '$argon2id$v=19$m=65536,t=4,p=1$V3dKc2NqcDlXU0tlaHlueA$+xkyEjLd8O6MTWnwZFhYOBYcsmMN6O2RxfWhD6Twhng');
         if (!$user || !$ok || $user['disabled']) {
@@ -103,6 +103,12 @@ final class Auth
                 $db->run('INSERT INTO {login_attempts} (key_bidx, at) VALUES (?, ?)', [$k, App::now()]);
             }
             throw new HttpError(401, 'Wrong email or password', 'invalid_login');
+        }
+        // The organisation's rules (Settings → Security): only from trusted networks, and passkeys instead of passwords.
+        $security = new Security($this->app);
+        $security->checkNetwork((int) $user['id'], $ip);
+        if ($security->passkeysOnly($user['role']) && $security->hasPasskey((int) $user['id'])) {
+            throw new HttpError(403, 'Your organisation signs in with passkeys only: use your passkey (Face ID, Touch ID, Windows Hello or your fingerprint). Lost it? Ask your administrator to reset your two-step verification.', 'passkey_required');
         }
         if (password_needs_rehash($user['password_hash'], defined('PASSWORD_ARGON2ID') ? PASSWORD_ARGON2ID : PASSWORD_DEFAULT)) {
             $db->run('UPDATE {users} SET password_hash = ? WHERE id = ?', [self::hash($password), $user['id']]);
@@ -146,9 +152,34 @@ final class Auth
         if (session_status() === PHP_SESSION_ACTIVE) {
             session_regenerate_id(true); // a new session id at sign-in: an id planted before it is useless
         }
-        $version = (int) $this->app->db->value('SELECT session_version FROM {users} WHERE id = ?', [$userId]);
-        $_SESSION = ['uid' => $userId, 'sv' => $version, 'csrf' => bin2hex(random_bytes(32)), 'seen' => time()];
+        $row = $this->app->db->one('SELECT session_version, role FROM {users} WHERE id = ?', [$userId]);
+        $security = new Security($this->app);
+        $security->checkNetwork($userId, Http::ip());
+        $_SESSION = ['uid' => $userId, 'sv' => (int) $row['session_version'], 'csrf' => bin2hex(random_bytes(32)), 'seen' => time()];
+        // Passkeys only, and none yet (signed in with the password this once): adding one comes before anything else.
+        if ($security->passkeysOnly($row['role']) && !$security->hasPasskey($userId)) {
+            $_SESSION['passkey_setup'] = true;
+        }
         $this->app->db->run('UPDATE {users} SET last_login_at = ? WHERE id = ?', [App::now(), $userId]);
+    }
+
+    /**
+     * For sensitive changes: the person's password again, or their passkey ($in['passkey'], a navigator.credentials.get()
+     * answer). With passkeys only, it must be the passkey.
+     */
+    public function confirm(int $userId, array $in): void
+    {
+        if (isset($in['passkey']) && is_array($in['passkey'])) {
+            if ((new Passkeys($this->app))->login($in['passkey']) !== $userId) {
+                throw new HttpError(422, "That passkey isn't yours", 'wrong_passkey');
+            }
+            return;
+        }
+        $role = (string) $this->app->db->value('SELECT role FROM {users} WHERE id = ?', [$userId]);
+        if ((new Security($this->app))->passkeysOnly($role)) {
+            throw new HttpError(422, 'Confirm with your passkey', 'passkey_required');
+        }
+        $this->confirmPassword($userId, (string) ($in['password'] ?? ''));
     }
 
     /** For sensitive changes: the person's password again. */
@@ -192,9 +223,31 @@ final class Auth
             $this->beginPending((int) $uid);
             return null;
         }
+        // Off the trusted networks now (left the VPN, say): signed out, with the reason.
+        $security = new Security($this->app);
+        try {
+            $security->checkNetwork((int) $uid, Http::ip());
+        } catch (HttpError $e) {
+            $this->logout();
+            throw new HttpError(401, $e->getMessage(), 'network_not_allowed');
+        }
         $_SESSION['seen'] = time();
         $c = $this->app->crypto;
-        return ['id' => (int) $row['id'], 'email' => $c->decrypt($row['email_enc'], 'users.email'), 'name' => $c->decrypt($row['name_enc'], 'users.name') ?? '', 'role' => $row['role']];
+        $user = ['id' => (int) $row['id'], 'email' => $c->decrypt($row['email_enc'], 'users.email'), 'name' => $c->decrypt($row['name_enc'], 'users.name') ?? '', 'role' => $row['role']];
+        // Administration only from the trusted networks: elsewhere an administrator is an ordinary user.
+        if ($row['role'] === 'admin' && !$security->adminHere(Http::ip())) {
+            $user['role'] = 'user';
+            $user['admin_elsewhere'] = true;
+        }
+        $user['passkeys_only'] = $security->passkeysOnly($row['role']);
+        if (!empty($_SESSION['passkey_setup'])) {
+            if ($security->hasPasskey((int) $uid) || !$security->passkeysOnly($row['role'])) {
+                unset($_SESSION['passkey_setup']);
+            } else {
+                $user['passkey_setup'] = true;
+            }
+        }
+        return $user;
     }
 
     public function requireUser(): array
@@ -205,6 +258,9 @@ final class Auth
     public function requireAdmin(): array
     {
         $u = $this->requireUser();
+        if (!empty($u['admin_elsewhere'])) {
+            throw new HttpError(403, 'Administration is only allowed from your trusted networks (Settings → Security). Use the office network or VPN.', 'admin_network');
+        }
         if ($u['role'] !== 'admin') {
             throw new HttpError(403, 'Only an administrator can do that', 'forbidden');
         }

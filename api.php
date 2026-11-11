@@ -120,6 +120,11 @@ try {
     if ($method !== 'GET') {
         Auth::checkCsrf();
     }
+    // Passkeys only, signed in with the password this once: a passkey first, then everything else.
+    if (!empty($user['passkey_setup']) && !in_array($action, ['passkey/register/options', 'passkey/register', 'passkey/list', 'sessions'], true)) {
+        throw new HttpError(403, 'Add a passkey to carry on: your organisation signs in with passkeys only.', 'passkey_setup');
+    }
+    $security = new \Webmail\Security($app);
     // Scheduled email to send, snoozed email to bring back: done after this answer has gone.
     \Webmail\Due::afterResponse($app);
 
@@ -131,10 +136,10 @@ try {
             Http::json($mfa->beginSetup($user['email']));
         case 'POST mfa/setup':
             $in = Http::body();
-            $auth->confirmPassword($user['id'], (string) ($in['password'] ?? ''));
+            $auth->confirm($user['id'], $in);
             Http::json(['ok' => true, 'recovery_codes' => $mfa->confirmSetup($user['id'], (string) ($in['code'] ?? ''))]);
         case 'POST mfa/recovery-codes':
-            $auth->confirmPassword($user['id'], (string) (Http::body()['password'] ?? ''));
+            $auth->confirm($user['id'], Http::body());
             Http::json(['recovery_codes' => $mfa->newRecoveryCodes($user['id'])]);
         case 'GET messages':
             Http::json($store->list($user['id'], $int('mailbox') ?: null, (string) ($_GET['folder'] ?? 'inbox'), max(1, $int('page')),
@@ -329,8 +334,32 @@ try {
     if (str_starts_with($action, 'team/')) {
         (new \Webmail\Team($app))->route($action, $method, $user);
     }
+    // Where you're signed in, and signing a device out.
+    if ($action === 'sessions' && $method === 'GET') {
+        Http::json(['sessions' => $security->sessions($user['id'], session_id())]);
+    }
+    if ($action === 'sessions/revoke' && $method === 'POST') {
+        $n = $security->revoke($user['id'], (string) (Http::body()['id'] ?? ''), session_id());
+        Http::json(['ok' => true, 'signed_out' => $n]);
+    }
+    if ($action === 'customer' && $method === 'GET') {
+        Http::json((new \Webmail\Customers($app))->forMessage($user, $int('id')));
+    }
     if (str_starts_with($action, 'admin/')) {
-        $auth->requireAdmin();
+        $me = $auth->requireAdmin();
+        switch ("$method $action") {
+            case 'GET admin/security':
+                Http::json($security->summary());
+            case 'POST admin/security':
+                $in = Http::body();
+                $auth->confirm($me['id'], $in);
+                Http::json($security->save($me, $in, Http::ip()));
+            case 'GET admin/users/sessions':
+                Http::json(['sessions' => $security->sessions($int('id'))]);
+            case 'POST admin/users/sessions/revoke':
+                $in = Http::body();
+                Http::json(['ok' => true, 'signed_out' => $security->revoke((int) ($in['user_id'] ?? 0), (string) ($in['id'] ?? 'all'))]);
+        }
         if ($action === 'admin/data-requests' || str_starts_with($action, 'admin/data-requests/')) {
             (new \Webmail\DataRequests($app))->routeAdmin($action, $method, $user);
         }
@@ -367,5 +396,7 @@ function secondStep(Auth $auth, Mfa $mfa): array
     if (!$p) {
         return [];
     }
-    return ['mfa' => $p['stage'], 'methods' => $p['stage'] === 'verify' ? $mfa->status($p['uid']) : null];
+    $role = (string) App::get()->db->value('SELECT role FROM {users} WHERE id = ?', [$p['uid']]);
+    return ['mfa' => $p['stage'], 'methods' => $p['stage'] === 'verify' ? $mfa->status($p['uid']) : null,
+        'passkeys_only' => (new \Webmail\Security(App::get()))->passkeysOnly($role)];
 }

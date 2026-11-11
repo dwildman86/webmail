@@ -3,6 +3,14 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.14.0
+- **Customer panel** beside every email: who it's with, every conversation with them in the mailboxes you can read (where each is up to, and who has it), how many there have been and since when, their address book entry, and the fields GhostParse's parsers found in their email (order number, customer id, plan…), newest first. Open it with the person button above the email or `i`; it stays open on wide screens, and slides over the email on smaller ones. Email from before this version is added to it in the background over the first few minutes.
+- **Where you're signed in**: Settings → Sign-in & alerts lists every browser and installed app you're signed in on, from where and when it was last used. **Sign out** one (it needs your password or passkey again, and its notifications stop), or everywhere else at once. Administrators see anyone's under Users → Devices.
+- **Trusted networks** (administrators: Settings → Security): administration only from your office or VPN (elsewhere, administrators can still read their email), everyone only from some networks, or one person only from theirs (Users → Edit). Someone who leaves them is signed out at their next click. You can't save a setting that would lock you out.
+- **Passkeys only** (Settings → Security): no passwords for signing in, for administrators or for everyone, just Face ID, Touch ID, Windows Hello or a fingerprint. Someone without a passkey yet signs in with their password once and adds one straight away. Changes that asked for your password ask for your passkey instead. Lost one? An administrator resets the person's two-step verification and they add a new one.
+- Locked out by either? On the server: `php security-reset.php`.
+- Fixed: a shared mailbox's list could fail to load when two emails of one conversation were both in it.
+
 ## 1.13.0
 - **Calendar**: Day, Week, Month and Schedule views, in the side menu (and the bottom bar on phones). Drag down the hours to make an event, drag it to move it, drag its edge to change when it ends. Events have a place (video call links open with a click), notes, a colour and reminders as notifications, and repeat daily, on weekdays, weekly on chosen days, monthly on a date or on the second Tuesday (say), yearly, or your own way. Change or delete just one occurrence, it and the ones after, or all. Weekly meetings stay at the same time when the clocks change.
 - **Shared calendars** for the team: holidays, rotas, meeting rooms. Choose who's on each and whether they can change it or only see it; everyone gets its reminders and sees who added what. Your own calendars stay yours: *My calendar*, and any more you make.

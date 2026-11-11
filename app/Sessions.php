@@ -43,8 +43,17 @@ final class Sessions implements \SessionHandlerInterface, \SessionUpdateTimestam
 
     public function write(string $id, string $data): bool
     {
-        $this->app->db->run('REPLACE INTO {sessions} (id_hash, data_enc, updated_at) VALUES (?, ?, ?)',
-            [self::key($id), $this->app->crypto->encrypt($data, 'sessions.data'), time()]);
+        // Whose it is, and the device and address it was last used from: for the list of where someone is signed in.
+        $uid = isset($_SESSION['uid']) ? (int) $_SESSION['uid'] : null;
+        $agent = $uid ? mb_substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 400) : null;
+        $app = $uid && ($_SERVER['HTTP_X_WEBMAIL_APP'] ?? '') === '1' ? 1 : 0;
+        $this->app->db->run(
+            'INSERT INTO {sessions} (id_hash, data_enc, updated_at, user_id, handle, ip, agent_enc, app, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE data_enc = VALUES(data_enc), updated_at = VALUES(updated_at), user_id = VALUES(user_id), ip = VALUES(ip), handle = COALESCE(handle, VALUES(handle)),
+               agent_enc = COALESCE(VALUES(agent_enc), agent_enc), app = GREATEST(app, VALUES(app)), created_at = COALESCE(created_at, VALUES(created_at))',
+            [self::key($id), $this->app->crypto->encrypt($data, 'sessions.data'), time(), $uid, bin2hex(random_bytes(16)), $uid ? Http::ip() : null,
+                $agent !== null ? $this->app->crypto->encrypt($agent, 'sessions.agent') : null, $app, $uid ? time() : null],
+        );
         return true;
     }
 

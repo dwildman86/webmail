@@ -178,4 +178,14 @@ final class TeamTest extends TestCase
         $mine = $this->store->storeInbound($this->inbound(['recipients' => [['address' => 'alex@acme.test', 'base_address' => 'alex@acme.test', 'tag' => null]], 'envelope' => ['rcpt_to' => ['alex@acme.test']]]))[0]['id'];
         $this->fails(fn () => $team->startDraft($this->alex, $mine, []), 422, '/no one to write with/');
     }
+
+    public function testTheListWorksWithTwoEmailsOfOneConversation(): void
+    {
+        // 1.9.0 to 1.13.0: two emails of one conversation in the list broke it (a placeholder per email, a value per conversation).
+        $this->receive(['thread_id' => 'thr_same', 'subject' => 'One']);
+        $this->receive(['thread_id' => 'thr_same', 'subject' => 'Re: One']);
+        $list = $this->store->list($this->alex['id'], null, 'inbox', 1, '', false, '', 0);
+        $this->assertNotEmpty($list['messages']);
+        $this->assertSame('open', $list['messages'][0]['team']['status'] ?? 'open');
+    }
 }

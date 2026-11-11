@@ -231,7 +231,7 @@ final class Mailstore
         $id = $db->tx(function (Db $db) use ($c, $mailboxId, $folder, $gpId, $data, $text, $html, $snippet, $meta, $attachments, $files, $date, $read) {
             $id = $db->insert(
                 'INSERT INTO {messages} (mailbox_id, folder, gp_id, thread_key, from_enc, to_enc, subject_enc, snippet_enc, body_enc, meta_enc,
-                    sent_at, sort_at, is_read, has_attachments, size, auth_verdict, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    sent_at, sort_at, is_read, has_attachments, size, auth_verdict, created_at, extracted_enc, parties_indexed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
                 [$mailboxId, $folder, $gpId, $data['thread_id'] ?? $data['message_id'] ?? $gpId,
                     $c->encryptJson($data['from'] ?? null, 'messages.from'),
                     $c->encryptJson(['to' => $data['to'] ?? [], 'cc' => $data['cc'] ?? [], 'bcc' => $data['bcc'] ?? [], 'reply_to' => $data['reply_to'] ?? []], 'messages.to'),
@@ -240,8 +240,11 @@ final class Mailstore
                     $c->encryptJson(['text' => $text, 'html' => $html, 'reply_text' => $data['reply_text'] ?? null], 'messages.body'),
                     $c->encryptJson($meta, 'messages.meta'),
                     gmdate('Y-m-d H:i:s', $date), gmdate('Y-m-d H:i:s', $date), $read ? 1 : 0, count($files) > 0 ? 1 : 0, (int) ($data['size'] ?? strlen($text . $html)),
-                    $data['authentication']['verdict'] ?? null, App::now()],
+                    $data['authentication']['verdict'] ?? null, App::now(),
+                    // What GhostParse's parser pulled out of it (an order number, a customer id…), for the customer panel.
+                    self::hasExtracted($data['extracted'] ?? null) ? $c->encryptJson($data['extracted'], 'messages.extracted') : null],
             );
+            $this->indexParties($db, $id, $data);
             foreach ($attachments as $a) {
                 $content = isset($a['content']) && is_string($a['content']) ? base64_decode($a['content'], true) : null;
                 $db->run(
@@ -257,6 +260,46 @@ final class Mailstore
             return $id;
         });
         return $id;
+    }
+
+    private static function hasExtracted(mixed $x): bool
+    {
+        return is_array($x) && (array_filter((array) ($x['fields'] ?? []), fn ($v) => $v !== null && $v !== '' && $v !== []) || !empty($x['data']));
+    }
+
+    /** A person's address as a blind index: the same for everyone's mailboxes, and nothing without the key. */
+    public function partyIndex(string $address): string
+    {
+        return $this->c()->blindIndex(mb_strtolower(trim($address)), 'messages.party');
+    }
+
+    /** The people on an email other than this webmail's own mailboxes: who it's from and to (for the customer panel). */
+    private function indexParties(Db $db, int $messageId, array $data): void
+    {
+        $people = array_merge([$data['from'] ?? null], $data['to'] ?? [], $data['cc'] ?? [], $data['reply_to'] ?? []);
+        $own = array_flip(array_column($db->all('SELECT address_bidx FROM {mailboxes}'), 'address_bidx'));
+        $seen = [];
+        foreach ($people as $p) {
+            $a = mb_strtolower(trim((string) ($p['address'] ?? '')));
+            if ($a === '' || isset($seen[$a]) || isset($own[$this->addressIndex($a)])) {
+                continue;
+            }
+            $seen[$a] = true;
+            $db->run('INSERT IGNORE INTO {message_parties} (address_bidx, message_id) VALUES (?, ?)', [$this->partyIndex($a), $messageId]);
+        }
+    }
+
+    /** Email stored before 1.14.0: its people indexed a batch at a time (with the due work). Returns how many. */
+    public function indexOldParties(int $limit = 300): int
+    {
+        $c = $this->c();
+        $rows = $this->app->db->all('SELECT id, from_enc, to_enc FROM {messages} WHERE parties_indexed = 0 LIMIT ' . max(1, $limit));
+        foreach ($rows as $r) {
+            $to = $c->decryptJson($r['to_enc'], 'messages.to') ?? [];
+            $this->indexParties($this->app->db, (int) $r['id'], ['from' => $c->decryptJson($r['from_enc'], 'messages.from')] + $to);
+            $this->app->db->run('UPDATE {messages} SET parties_indexed = 1 WHERE id = ?', [$r['id']]);
+        }
+        return count($rows);
     }
 
     /** Blind-index the words of the subject, people and text, so search works without decrypting every message. */

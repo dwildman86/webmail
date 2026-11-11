@@ -82,13 +82,20 @@ async function api(action, { method = "GET", body, query } = {}) {
   const qs = new URLSearchParams({ a: action, ...(query || {}) });
   const res = await fetch(`api.php?${qs}`, {
     method, credentials: "same-origin",
-    headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...(method !== "GET" ? { "X-CSRF-Token": csrf } : {}) },
+    headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...(method !== "GET" ? { "X-CSRF-Token": csrf } : {}),
+      // The installed app or a browser tab: for the list of where you're signed in.
+      "X-Webmail-App": matchMedia("(display-mode: standalone)").matches || navigator.standalone === true ? "1" : "0" },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && !["session", "login", "passkey/login"].includes(action)) {
-    showLogin();
+    // Off the trusted networks: signed out, with the reason.
+    showLogin(data.error === "network_not_allowed" ? data.message : undefined);
     throw new Error(data.message || "Sign in again");
+  }
+  // Passkeys only: a change that needs confirming is confirmed with the passkey (Face ID, Touch ID…), then sent again.
+  if (res.status === 422 && data.error === "passkey_required" && body && !body.passkey && window.Passkeys?.available?.()) {
+    return api(action, { method, query, body: { ...body, password: undefined, passkey: await window.Passkeys.assertion() } });
   }
   if (!res.ok) throw Object.assign(new Error(data.message || `Error ${res.status}`), { status: res.status, data });
   return data;
@@ -178,6 +185,7 @@ async function start() {
     state.appInfo = s.app;
     state.prefs = s.prefs || state.prefs;
     state.scheduledCount = s.scheduled || 0;
+    if (s.user.passkey_setup) { showPasskeySetup(); return; }
     renderShell();
     await loadList();
     window.Notifications?.afterSignIn?.(s);
@@ -212,7 +220,7 @@ const codeInput = (extra = {}) => h("input", { name: "code", required: true, inp
   spellcheck: false, autocapitalize: "off", class: "input code-input", placeholder: "123456", ...extra });
 
 async function showSecondStep(data) {
-  if (data.mfa === "enrol") return showEnrol();
+  if (data.mfa === "enrol") return data.passkeys_only ? showPasskeySetup(true) : showEnrol();
   const error = h("div", { class: "error", role: "alert" });
   const code = codeInput();
   const submit = h("button", { class: "btn btn-primary" }, "Continue");
@@ -234,6 +242,25 @@ async function showSecondStep(data) {
       ? "Lost your phone? Type one of your recovery codes in the box instead."
       : "Lost your phone? Ask your administrator to reset your two-step verification."));
   code.focus();
+}
+
+/**
+ * Passkeys only, and none yet: add one before anything else (after the password, or as the second step). With
+ * pending, it's the sign-in's second step (and recovery codes come back); else the session is signed in already.
+ */
+function showPasskeySetup(pending = false) {
+  const error = h("div", { class: "error", role: "alert" });
+  const add = h("button", { class: "btn btn-primary", onclick: async () => {
+    add.disabled = true; error.textContent = "";
+    try {
+      const r = await window.Passkeys.register(/iPhone|iPad|Mac/.test(navigator.userAgent) ? "Apple passkey" : /Windows/.test(navigator.userAgent) ? "Windows Hello" : "Passkey");
+      if (pending) { csrf = r.csrf; showRecoveryCodes(r.recovery_codes, start); } else { toast("Passkey added. Next time, sign in with it."); start(); }
+    } catch (err) { error.textContent = err.name === "NotAllowedError" ? "Cancelled. Try again when you're ready." : err.message; add.disabled = false; }
+  } }, icon("shield"), "Add a passkey");
+  authCard("Add a passkey to carry on", "Your organisation signs in with passkeys instead of passwords: Face ID, Touch ID, Windows Hello or your fingerprint. Add one now; next time, that's how you sign in.",
+    window.Passkeys?.available?.() ? h("div", { class: "auth-actions" }, add)
+      : h("div", { class: "notice warn" }, "This browser can't make a passkey here. Use a recent Chrome, Edge, Safari or Firefox, on the webmail's https:// address."),
+    error, h("p", { class: "muted small" }, "Your face or fingerprint never leaves your device. You can add more devices later, under Settings → Sign-in & alerts."));
 }
 
 async function showEnrol() {
@@ -481,7 +508,7 @@ async function updateSection() {
       return;
     }
     parts.push(h("p", { class: "muted small" }, "The new files are downloaded from GhostParse, checked, and copied over these ones. Your settings, mail and users stay as they are, and the old files are kept in storage/updates in case they're needed. It takes a few seconds."),
-      formFor([h("label", { class: "field" }, "Your password, to confirm", h("input", { type: "password", name: "password", required: true, autocomplete: "current-password" }))],
+      formFor([confirmPw("Your password, to confirm")],
         `Update to ${u.latest}`, async (v) => {
           const r = await api("admin/update", { method: "POST", body: { password: v.password } });
           box.replaceChildren(h("h3", {}, "Webmail version"), h("div", { class: "notice ok" }, `Updated to ${r.version}. Reloading…`));
@@ -912,6 +939,8 @@ async function openMessage(id) {
       if (listed) { listed.starred = m.starred; renderList(); }
     } }, icon("star")),
     h("span", { class: "spacer" }),
+    m.folder !== "drafts" && h("button", { class: `icon-btn customer-toggle${customerPanelOpen() ? " on-soft" : ""}`, title: "Customer: their history and details (i)", "aria-label": "Customer details",
+      "aria-pressed": String(customerPanelOpen()), onclick: (e) => { toggleCustomerPanel(); e.currentTarget.classList.toggle("on-soft", customerPanelOpen()); e.currentTarget.setAttribute("aria-pressed", String(customerPanelOpen())); } }, icon("contacts")),
     h("button", { class: "icon-btn", title: "Reply (r)", "aria-label": "Reply", onclick: () => compose({ mode: "reply", of: last() }) }, icon("reply")),
     h("button", { class: "icon-btn", title: "Reply all", "aria-label": "Reply all", onclick: () => compose({ mode: "replyAll", of: last() }) }, icon("replyAll")),
     h("button", { class: "icon-btn", title: "Forward (f)", "aria-label": "Forward", onclick: () => compose({ mode: "forward", of: last() }) }, icon("forward")));
@@ -933,14 +962,68 @@ async function openMessage(id) {
     } }, "✕")))) : null;
   const snoozedNote = m.snoozed_until ? h("div", { class: "notice warn row between" }, h("span", {}, icon("clock"), ` Snoozed until ${longDate(m.snoozed_until)}`),
     h("button", { class: "btn btn-sm", onclick: async () => { await api("messages/snooze", { method: "POST", body: { ids: [m.id], until: null } }); toast("Back in its folder."); openMessage(m.id); refresh(); } }, "Unsnooze")) : null;
-  $reader.replaceChildren(bar, h("div", { class: "reader-body" }, h("h1", {}, m.subject || "(no subject)"), labelChips, snoozedNote, shared && teamTop, mails,
+  const panel = m.folder !== "drafts" ? h("aside", { class: "customer-panel", "aria-label": "Customer" }, h("p", { class: "muted small" }, "Loading…")) : null;
+  $reader.replaceChildren(bar, h("div", { class: `reader-split${panel && customerPanelOpen() ? " with-customer" : ""}` }, h("div", { class: "reader-body" }, h("h1", {}, m.subject || "(no subject)"), labelChips, snoozedNote, shared && teamTop, mails,
     h("div", { class: "reply-row" },
       h("button", { class: "btn", onclick: () => compose({ mode: "reply", of: last() }) }, icon("reply"), "Reply"),
       h("button", { class: "btn", onclick: () => compose({ mode: "replyAll", of: last() }) }, icon("replyAll"), "Reply all"),
       h("button", { class: "btn", onclick: () => compose({ mode: "forward", of: last() }) }, icon("forward"), "Forward"),
       shared && h("button", { class: "btn", title: "A reply the team writes together, live", onclick: () => compose({ mode: "reply", of: last(), share: true }) }, icon("people"), "Write together")),
-    shared && teamNotes));
+    shared && teamNotes), panel));
   if (shared) teamPanel(m, teamTop, teamNotes);
+  if (panel) customerPanel(m, panel);
+}
+
+// ------------------------------------------------------------------------------------------------ the customer panel
+// Beside an email: who it's with, every conversation with them, and the fields GhostParse's parsers found in their email.
+
+function customerPanelOpen() {
+  // Open by default on wide screens; a drawer to open when wanted on smaller ones. The choice is remembered.
+  try { const v = localStorage.getItem("wm.customer"); if (v !== null) return v === "1"; } catch { /* private browsing */ }
+  return matchMedia("(min-width: 1400px)").matches;
+}
+function toggleCustomerPanel(force) {
+  const on = force ?? !customerPanelOpen();
+  try { localStorage.setItem("wm.customer", on ? "1" : "0"); } catch { /* fine */ }
+  $reader.querySelector(".reader-split")?.classList.toggle("with-customer", on);
+}
+
+async function customerPanel(m, panel) {
+  let r;
+  try { r = await api("customer", { query: { id: String(m.id) } }); } catch (err) { panel.replaceChildren(h("p", { class: "muted small" }, err.message)); return; }
+  if (current?.message?.id !== m.id) return; // another email is open now
+  const c = r.customer;
+  const close = h("button", { class: "icon-btn small-btn panel-close", "aria-label": "Close", onclick: () => toggleCustomerPanel(false) }, icon("close"));
+  if (!c) { panel.replaceChildren(close, h("p", { class: "muted small" }, "Only your own addresses are on this email.")); return; }
+  const day = (iso) => iso ? new Date(iso).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) : "—";
+  const status = { open: "Open", in_progress: "In progress", resolved: "Resolved" };
+  const multi = new Set(c.conversations.map((t) => t.mailbox)).size > 1;
+  const stat = (n, label) => h("div", { class: "stat" }, h("strong", {}, String(n)), h("span", {}, label));
+  const contact = c.contact;
+  panel.replaceChildren(close,
+    h("div", { class: "cust-head" }, avatar({ name: c.name, address: c.address }),
+      h("div", { class: "grow" }, h("div", { class: "cust-name" }, c.name || c.address), h("a", { class: "muted small", href: `mailto:${c.address}`, onclick: (e) => { e.preventDefault(); compose({ to: c.address }); } }, c.address))),
+    contact ? h("div", { class: "cust-contact" },
+      contact.company && h("div", {}, icon("people"), contact.company), contact.phone && h("div", {}, icon("phone"), h("a", { href: `tel:${contact.phone.replace(/[^\d+]/g, "")}` }, contact.phone)),
+      contact.notes && h("div", { class: "cust-notes" }, contact.notes), h("div", { class: "muted small" }, contact.book === "shared" ? "From the shared address book" : "From your contacts"))
+      : h("button", { class: "linkish add-contact", onclick: async (e) => {
+        try { await api("book/save", { method: "POST", body: { book: "personal", email: c.address, name: c.name } }); e.currentTarget.replaceWith(h("span", { class: "muted small" }, "Added to your contacts.")); }
+        catch (err) { toast(err.message); }
+      } }, icon("personAdd"), "Add to contacts"),
+    h("div", { class: "cust-stats" }, stat(c.stats.conversations + (c.stats.more ? "+" : ""), c.stats.conversations === 1 ? "conversation" : "conversations"),
+      c.stats.open + c.stats.resolved > 0 ? stat(c.stats.open, "open") : stat(c.stats.messages, c.stats.messages === 1 ? "email" : "emails"),
+      h("div", { class: "stat", title: day(c.stats.first_at) }, h("strong", {}, c.stats.first_at ? new Date(c.stats.first_at).toLocaleDateString([], { month: "short", year: "numeric" }) : "—"), h("span", {}, "first contact"))),
+    c.fields.length > 0 && h("section", { class: "cust-section" }, h("h4", {}, "From their email"),
+      h("dl", { class: "cust-fields" }, c.fields.map((f) => [h("dt", { title: `${f.parser ? `${f.parser} parser, ` : ""}${day(f.at)}` }, f.label),
+        h("dd", { class: f.this_conversation ? "here" : "" }, f.value, !f.this_conversation && h("button", { class: "when", title: "Open the email it came from", onclick: () => openMessage(f.message_id) }, day(f.at)))])),
+      h("p", { class: "muted tiny" }, "Found by GhostParse's parsers. The newest value of each; ones from other conversations show when.")),
+    h("section", { class: "cust-section" }, h("h4", {}, "Conversations"),
+      h("ul", { class: "cust-threads" }, c.conversations.map((t) => h("li", { class: t.current ? "current" : "" },
+        h("button", { onclick: () => { if (!t.current) openMessage(t.message_id); } },
+          h("span", { class: `subj${t.unread ? " unread" : ""}` }, t.subject || "(no subject)"),
+          h("span", { class: "meta" }, day(t.last_at), t.messages > 1 ? ` · ${t.messages} emails` : "", multi ? ` · ${t.mailbox}` : "", t.current ? " · this one" : ""),
+          (t.status || t.assignee) && h("span", { class: "chips" }, t.status && h("span", { class: `status-chip ${t.status}` }, status[t.status]), t.assignee && h("span", { class: "muted tiny" }, t.assignee)))))),
+      c.stats.conversations > c.conversations.length && h("p", { class: "muted tiny" }, `The latest ${c.conversations.length}. Search for ${c.address} to see them all.`)));
 }
 
 /**
@@ -1914,7 +1997,7 @@ async function openSettings(tab = "account") {
   document.querySelector(".overlay.settings-overlay")?.remove();
   const body = h("div", { class: "tab-body" });
   const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["templates", "Templates"], ["rules", "Rules & labels"], ["import", "Import email"], ["security", "Sign-in & alerts"],
-    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
+    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-security", "Security"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
     nav.replaceChildren(...tabs.map(([k, label]) => h("button", { class: k === key ? "on" : "", "aria-current": k === key ? "page" : null, onclick: () => show(k) }, label)));
@@ -1929,6 +2012,12 @@ async function openSettings(tab = "account") {
       h("div", { class: "dialog-body" }, nav, body)));
   document.body.append(overlay);
   show(tab);
+}
+
+/** "Your password" to confirm a change; with passkeys only, nothing to type (the passkey is asked for when it's sent). */
+function confirmPw(label = "Your password", name = "password") {
+  if (state.user?.passkeys_only) return h("p", { class: "muted small" }, "You'll confirm this with your passkey.");
+  return h("label", { class: "field" }, label, h("input", { type: "password", name, required: true, autocomplete: "current-password" }));
 }
 
 function formFor(fields, label, onSubmit) {
@@ -2401,17 +2490,14 @@ async function twoStepSettings() {
   const st = await api("mfa/status");
   const box = h("section", {}, h("h3", {}, "Two-step verification"));
   const area = h("div");
-  const passwordForm = (label, onPassword) => {
-    const pw = h("input", { type: "password", required: true, autocomplete: "current-password" });
-    return formFor([h("label", { class: "field" }, "Your password", pw)], label, async () => onPassword(pw.value));
-  };
+  const passwordForm = (label, onPassword) => formFor([confirmPw()], label, async (v) => onPassword(v.password));
   box.append(
     h("p", { class: "muted" }, "Required for everyone: after your password, you confirm it's you with your authenticator app or a passkey."),
     h("div", { class: "row between" }, h("div", {}, h("strong", {}, "Authenticator app"),
       h("div", { class: "muted small" }, st.totp ? `On since ${new Date(st.totp_since).toLocaleDateString()}` : "Not set up")),
       h("button", { class: "btn btn-sm", onclick: async () => {
         const setup = await api("mfa/setup");
-        area.replaceChildren(totpSetupForm(setup, true, (r) => {
+        area.replaceChildren(totpSetupForm(setup, !state.user.passkeys_only, (r) => {
           toast("Your authenticator app is set up.");
           area.replaceChildren(r.recovery_codes?.length ? h("div", {}, h("p", {}, "Your new recovery codes. Save them now: they won't be shown again."),
             recoveryCodesBox(r.recovery_codes, r.recovery_codes.join("\n"))) : "");
@@ -2428,12 +2514,77 @@ async function twoStepSettings() {
   return box;
 }
 
+/**
+ * Where someone is signed in: each browser and installed app, from where, and when it was last used, with Sign out.
+ * Yours (Settings → Sign-in & alerts), or, for an administrator, someone else's (Users → Devices).
+ */
+function sessionList(of = null) {
+  const box = h("section", {}, h("h3", {}, of ? `Where ${of.name || of.email} is signed in` : "Where you're signed in"), h("p", { class: "muted" }, "Loading…"));
+  const when = (iso) => { const d = new Date(iso); const mins = Math.round((Date.now() - d) / 60000);
+    return mins < 2 ? "Active now" : mins < 60 ? `${mins} minutes ago` : mins < 1440 ? `${Math.round(mins / 60)} hours ago` : d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }); };
+  const revoke = async (id, what) => {
+    const r = await api(of ? "admin/users/sessions/revoke" : "sessions/revoke", { method: "POST", body: of ? { user_id: of.id, id } : { id } });
+    toast(r.signed_out === 1 ? `${what} is signed out.` : `${r.signed_out} devices signed out.`);
+    load();
+  };
+  const load = async () => {
+    try {
+      const { sessions } = await api(of ? "admin/users/sessions" : "sessions", { query: of ? { id: String(of.id) } : {} });
+      const others = sessions.filter((x) => !x.current);
+      box.replaceChildren(box.firstChild,
+        h("p", { class: "muted" }, of ? "Sign a device out if it's lost, or they've left. Their notifications on it stop too." : "Don't recognise one, or lost a phone? Sign it out: it needs your password (or passkey) again, and its notifications stop."),
+        sessions.length ? h("ul", { class: "sessions" }, sessions.map((x) => h("li", { class: x.current ? "current" : "" },
+          h("span", { class: "dev-icon" }, icon(/iPhone|Android/.test(x.device) ? "phone" : x.app ? "inbox" : "mail")),
+          h("div", { class: "grow" }, h("strong", {}, x.device), x.current && h("span", { class: "pill ok" }, "This device"),
+            h("div", { class: "muted small" }, [when(x.last_active_at), x.ip, x.signed_in_at && `signed in ${new Date(x.signed_in_at).toLocaleDateString([], { day: "numeric", month: "short" })}`].filter(Boolean).join(" · "))),
+          !x.current && h("button", { class: "btn btn-sm btn-danger", onclick: async (e) => { e.currentTarget.disabled = true; await revoke(x.id, x.device).catch((err) => toast(err.message)); } }, "Sign out"))))
+          : h("p", { class: "muted" }, of ? "Not signed in anywhere." : "Only here."),
+        (of ? sessions.length > 0 : others.length > 0) && h("button", { class: "btn btn-sm", onclick: async () => {
+          if (!confirm(of ? `Sign ${of.email} out everywhere?` : "Sign out everywhere except here?")) return;
+          await revoke(of ? "all" : "others", "").catch((err) => toast(err.message));
+        } }, of ? "Sign out everywhere" : "Sign out everywhere else"));
+    } catch (err) { box.replaceChildren(box.firstChild, h("div", { class: "notice bad" }, err.message)); }
+  };
+  load();
+  return box;
+}
+
+/** Settings → Security (administrators): trusted networks, and passkeys instead of passwords. */
+async function securityPolicy() {
+  const p = await api("admin/security");
+  const ranges = (name, value, placeholder) => h("textarea", { name, rows: 4, class: "mono-input", placeholder }, (value || []).join("\n"));
+  const choice = (v, label, hint) => h("label", { class: "check address" }, h("input", { type: "radio", name: "passkeys_only", value: v, checked: p.passkeys_only === v }),
+    h("span", {}, h("strong", {}, label), h("small", { class: "muted" }, hint)));
+  const without = p.without_passkey || [];
+  return h("div", {},
+    h("section", {}, h("h3", {}, "Trusted networks"),
+      h("p", { class: "muted" }, "Limit where the webmail can be used from: your office's and VPN's IP addresses. Someone signed in who leaves them is signed out at their next click. One address or range a line: ", h("code", {}, "203.0.113.7"), ", ", h("code", {}, "203.0.113.0/24"), ", ", h("code", {}, "2001:db8::/32"), "."),
+      h("p", { class: "notice info" }, "Your address now: ", h("strong", { class: "mono" }, p.your_ip), ". Behind a proxy or Cloudflare, this is the proxy's address: limits by network won't work there."),
+      formFor([
+        h("label", { class: "field" }, "Administration only from", h("small", {}, "Elsewhere, administrators can read and send their email but not change settings or users. Empty: anywhere."),
+          ranges("admin_ips", p.admin_ips, "203.0.113.0/24  # office\n198.51.100.7  # VPN")),
+        h("label", { class: "field" }, "Everyone only from", h("small", {}, "Signing in and using the webmail at all. Empty: anywhere. A person's own networks (Users → Edit) replace these for them."),
+          ranges("user_ips", p.user_ips, "")),
+        confirmPw()],
+      "Save networks", async (v) => { await api("admin/security", { method: "POST", body: { admin_ips: v.admin_ips, user_ips: v.user_ips, password: v.password } }); toast("Saved."); openSettings("admin-security"); })),
+    h("section", {}, h("h3", {}, "Passkeys only"),
+      h("p", { class: "muted" }, "Sign in with a passkey (Face ID, Touch ID, Windows Hello or a fingerprint) and never a password: nothing to phish or guess. Someone without a passkey yet signs in with their password once and has to add one straight away. Lost it? Reset their two-step verification under Users, and they add a new one the same way."),
+      formFor([
+        choice("off", "Off", "Passwords and a second step (an authenticator app or a passkey), as now."),
+        choice("admins", "Administrators", "Administrators sign in with passkeys only."),
+        choice("everyone", "Everyone", "Nobody signs in with a password."),
+        without.length > 0 && h("div", { class: "notice warn small" }, `Without a passkey yet (they'll add one at their next sign-in): `, without.map((u) => `${u.name || u.email}${u.role === "admin" ? " (administrator)" : ""}`).join(", "), "."),
+        h("p", { class: "muted small" }, "You need a passkey yourself first, and the webmail on https://. If you're ever locked out, on the server: ", h("code", {}, "php security-reset.php"), "."),
+        confirmPw()],
+      "Save", async (v) => { await api("admin/security", { method: "POST", body: { passkeys_only: v.passkeys_only, password: v.password } }); toast("Saved."); openSettings("admin-security"); })));
+}
+
 const SETTINGS = {
   import: () => importSettings(),
   async account() {
     return h("div", {},
       h("section", {}, h("h3", {}, "You"), h("p", {}, state.user.name, " · ", h("span", { class: "muted" }, state.user.email), " · ", state.user.role === "admin" ? "Administrator" : "User")),
-      h("section", {}, h("h3", {}, "Change your password"),
+      !state.user.passkeys_only && h("section", {}, h("h3", {}, "Change your password"),
         formFor([h("label", { class: "field" }, "Current password", h("input", { type: "password", name: "current", required: true, autocomplete: "current-password" })),
           h("label", { class: "field" }, "New password (10+ characters)", h("input", { type: "password", name: "new", minlength: 10, required: true, autocomplete: "new-password" }))],
         "Change password", async (v) => { await api("password", { method: "POST", body: v }); toast("Password changed."); })),
@@ -2452,18 +2603,25 @@ const SETTINGS = {
       ...await Promise.all(state.mailboxes.map(signatureSettings)));
   },
   async security() {
-    return h("div", {}, await twoStepSettings(), window.Passkeys?.settings?.() || h("section", {}, h("h3", {}, "Passkeys"), h("p", { class: "muted" }, "Not available in this browser.")),
-      window.Notifications?.settings?.() || null);
+    return h("div", {}, sessionList(), !state.user.passkeys_only ? await twoStepSettings() : h("section", {}, h("h3", {}, "Signing in"),
+      h("p", { class: "muted" }, "Your organisation signs in with passkeys only: no password. Add one for each device you use (or use one that syncs, like iCloud Keychain or Google Password Manager).")),
+    window.Passkeys?.settings?.() || h("section", {}, h("h3", {}, "Passkeys"), h("p", { class: "muted" }, "Not available in this browser.")),
+    window.Notifications?.settings?.() || null);
   },
+  async "admin-security"() { return securityPolicy(); },
   async "admin-users"() {
     const [{ users }, { mailboxes }] = await Promise.all([api("admin/users"), api("admin/mailboxes")]);
     const boxes = (selected) => h("div", {}, mailboxes.map((m) => h("label", { class: "check" }, h("input", { type: "checkbox", name: `mb_${m.id}`, checked: selected.includes(m.id) }), m.address)));
     const pickBoxes = (v) => mailboxes.filter((m) => v[`mb_${m.id}`] === "on").map((m) => m.id);
     const table = h("table", { class: "list" }, h("tr", {}, h("th", {}, "User"), h("th", {}, "Role"), h("th", {}, "Mailboxes"), h("th", {}, "")),
       users.map((u) => h("tr", {}, h("td", {}, u.name, h("div", { class: "muted small" }, u.email), u.disabled && h("span", { class: "pill bad" }, "disabled"),
-          !u.two_step && h("span", { class: "pill", title: "Sets it up at their next sign-in" }, "two-step not set up")),
+          !u.two_step && h("span", { class: "pill", title: "Sets it up at their next sign-in" }, "two-step not set up"),
+          u.passkeys > 0 && h("span", { class: "pill", title: "Has a passkey" }, icon("shield"), "passkey"),
+          u.allowed_ips?.length > 0 && h("span", { class: "pill", title: u.allowed_ips.join(", ") }, "trusted networks only")),
         h("td", {}, u.role), h("td", {}, mailboxes.filter((m) => u.mailbox_ids.includes(m.id)).map((m) => m.address).join(", ") || h("span", { class: "muted" }, "none")),
-        h("td", {}, h("button", { class: "btn btn-sm", onclick: () => editUser(u) }, "Edit")))));
+        h("td", { class: "nowrap" }, h("button", { class: "btn btn-sm", onclick: () => editUser(u) }, "Edit"), " ",
+          h("button", { class: "btn btn-sm", title: "Where they're signed in", onclick: () => { body2.replaceChildren(sessionList(u)); body2.scrollIntoView({ behavior: "smooth" }); } },
+            `Devices (${u.sessions})`)))));
     const editUser = (u) => {
       const dlg = h("section", {}, h("h3", {}, `Edit ${u.email}`),
         formFor([h("label", { class: "field" }, "Name", h("input", { name: "name", value: u.name })),
@@ -2471,6 +2629,9 @@ const SETTINGS = {
           h("label", { class: "field" }, "New password (leave empty to keep)", h("input", { type: "password", name: "password", minlength: 10, autocomplete: "new-password" })),
           h("label", { class: "check" }, h("input", { type: "checkbox", name: "disabled", checked: u.disabled }), "Can't sign in (disabled)"),
           h("div", { class: "field" }, "Mailboxes", boxes(u.mailbox_ids)),
+          h("label", { class: "field" }, "Only from these networks (optional)",
+            h("small", {}, "IP addresses or ranges, one a line (203.0.113.0/24, 2001:db8::/32). Empty: wherever Settings → Security allows. Signed in from elsewhere, they're signed out."),
+            h("textarea", { name: "allowed_ips", rows: 3, class: "mono-input", placeholder: "203.0.113.0/24  # office" }, (u.allowed_ips || []).join("\n"))),
           u.id !== state.user.id && u.two_step && h("div", { class: "field" }, "Two-step verification",
             h("p", { class: "muted small" }, "Lost their phone? A reset removes their authenticator app, passkeys and recovery codes and signs them out. They set up a new one when they next sign in."),
             h("button", { type: "button", class: "btn btn-sm btn-danger", onclick: async () => {
@@ -2479,7 +2640,8 @@ const SETTINGS = {
               toast("Reset. They'll set it up again at their next sign-in."); openSettings("admin-users");
             } }, "Reset two-step verification"))],
         "Save", async (v) => {
-          await api("admin/users/update", { method: "POST", body: { id: u.id, name: v.name, role: v.role, password: v.password || undefined, disabled: v.disabled === "on", mailbox_ids: pickBoxes(v) } });
+          await api("admin/users/update", { method: "POST", body: { id: u.id, name: v.name, role: v.role, password: v.password || undefined, disabled: v.disabled === "on", mailbox_ids: pickBoxes(v),
+            allowed_ips: v.allowed_ips || "" } });
           toast("Saved."); openSettings("admin-users");
         }));
       body2.replaceChildren(dlg);
@@ -2570,7 +2732,7 @@ const SETTINGS = {
         formFor([h("div", { class: "row" },
             h("label", { class: "field grow" }, "Name (the system that will use it)", h("input", { name: "name", required: true, maxlength: 100, placeholder: "e.g. Our CRM" })),
             h("label", { class: "field grow" }, "Only from these IP addresses (optional)", h("input", { name: "ips", placeholder: "203.0.113.10, 2001:db8::1" }))),
-          h("label", { class: "field" }, "Your password", h("input", { type: "password", name: "password", required: true, autocomplete: "current-password" }))],
+          confirmPw()],
         "Make a key", async (v) => {
           const k = await api("admin/data-requests/keys", { method: "POST", body: { name: v.name, password: v.password, allowed_ips: (v.ips || "").split(/[\s,]+/).filter(Boolean) } });
           newKey.replaceChildren(h("div", { class: "notice ok" }, h("p", {}, h("strong", {}, "Copy this key now: it isn't shown again.")), h("p", {}, h("code", { class: "secret" }, k.key)),
@@ -2602,6 +2764,7 @@ document.addEventListener("keydown", (e) => {
   else if (current && e.key === "b") $reader.querySelector('[aria-label="Snooze"]')?.click();
   else if (current && e.key === "l") $reader.querySelector('[aria-label="Labels"]')?.click();
   else if (current && e.key === "#") $reader.querySelector('[aria-label="Delete"]')?.click();
+  else if (current && e.key === "i") $reader.querySelector(".customer-toggle")?.click();
   else if (e.key === "Escape" && current) closeReader();
 });
 

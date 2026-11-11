@@ -736,7 +736,7 @@ final class DataRequests
             case 'POST admin/data-requests/discard':
                 Http::json($this->discard($id));
             case 'POST admin/data-requests/keys':
-                (new Auth($this->app))->confirmPassword($me['id'], (string) ($in['password'] ?? ''));
+                (new Auth($this->app))->confirm($me['id'], $in);
                 Http::json($this->createKey($me['id'], (string) ($in['name'] ?? ''), (array) ($in['allowed_ips'] ?? [])), 201);
             case 'POST admin/data-requests/keys/revoke':
                 $this->revokeKey((int) ($in['id'] ?? 0));
