@@ -1226,6 +1226,70 @@ async function refreshCounts() {
   try { const s = await api("session"); state.mailboxes = s.mailboxes; state.scheduledCount = s.scheduled || 0; renderFolders(); } catch { /* ignore */ }
 }
 
+// ------------------------------------------------------------------------------------------------ checks before sending
+
+/**
+ * Words that say a file comes with the email ("see attached", "I've included…"): the first one found in what you wrote
+ * (not the quoted email you're replying to), or null.
+ */
+const ATTACH_PHRASES = [
+  /\b(?:please\s+)?(?:see|find|view|check)\s+(?:the\s+)?(?:attached|enclosed|attachments?)\b/i,
+  /\battached\s+(?:is|are|you(?:'|’)ll\s+find|you\s+will\s+find|please\s+find|herewith|here|to\s+this\s+(?:email|message)|(?:the\s+|a\s+|my\s+|our\s+)?(?:file|files|document|documents|doc|docs|pdf|copy|invoice|quote|contract|report|form|photo|photos|picture|pictures|image|images|spreadsheet|cv|resume|résumé|statement|receipt|proposal|agreement|letter|brochure|slides|presentation))\b/i,
+  /\b(?:i|we)(?:(?:'|’)ve|\s+have)\s+(?:also\s+|now\s+|just\s+)?(?:attached|enclosed|included)\b/i,
+  /\b(?:i|we)(?:(?:'|’)m|\s+am|\s+are|(?:'|’)re)\s+(?:also\s+)?(?:attaching|enclosing|including)\b/i,
+  /\b(?:i|we)\s+(?:attach|enclose)\b/i,
+  /\b(?:attached|enclosed)\s*(?::|please|for\s+your|is\s+the)/i,
+  /\bin\s+the\s+(?:attached|attachment|enclosed)\b/i,
+  /\b(?:included|enclosed)\s+(?:is|are)\s+(?:the|a|my|our)\b/i,
+  /\bhere(?:'|’)?s\s+the\s+(?:file|document|attachment|pdf|invoice|spreadsheet)\b/i,
+  /\battachment\s*:/i,
+];
+function attachmentMention(text) {
+  // Lines quoted the plain-text way ("> …") and anything after "On … wrote:" belong to the email being answered.
+  const own = String(text || "").split(/\n[^\n]*\bwrote:\s*\n|\n-{5,}\s*Forwarded message/i)[0]
+    .split("\n").filter((l) => !/^\s*>/.test(l)).join("\n");
+  for (const re of ATTACH_PHRASES) {
+    const m = own.match(re);
+    if (m) return m[0].trim().replace(/\s*[:]$/, "");
+  }
+  return null;
+}
+
+/** Addresses in a To, Cc or Bcc box ("Jane <jane@x.com>, bob@y.com"), lower case. */
+const addressesIn = (v) => [...String(v || "").matchAll(/[^\s<>,;"']+@[^\s<>,;"']+\.[^\s<>,;"']+/g)].map((m) => m[0].toLowerCase());
+const FREEMAIL = new Set(["gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.co.uk", "live.com", "live.co.uk", "msn.com", "yahoo.com", "yahoo.co.uk", "ymail.com",
+  "icloud.com", "me.com", "mac.com", "aol.com", "proton.me", "protonmail.com", "gmx.com", "gmx.de", "gmx.net", "web.de", "mail.com", "zoho.com", "yandex.com", "btinternet.com",
+  "sky.com", "virginmedia.com", "talktalk.net", "fastmail.com", "hey.com", "qq.com", "163.com"]);
+/**
+ * People in Cc who probably don't know each other, and would see each other's addresses: two or more outside your own
+ * domain, from different companies (or personal addresses, like Gmail). Not colleagues on your domain, and not people
+ * already on the conversation you're replying to (they've seen each other). Returns them, or [] when it looks fine.
+ */
+function ccShouldBeBcc(cc, fromAddress, already = []) {
+  const ownDomain = String(fromAddress || "").toLowerCase().split("@")[1] || "";
+  const seen = new Set(already.map((a) => String(a).toLowerCase()));
+  const outside = [...new Set(addressesIn(cc))].filter((a) => a.split("@")[1] !== ownDomain);
+  if (outside.length < 2 || outside.every((a) => seen.has(a))) return [];
+  const domains = new Set(outside.map((a) => a.split("@")[1]));
+  const strangers = domains.size > 1 || outside.some((a) => FREEMAIL.has(a.split("@")[1]));
+  return strangers ? outside : [];
+}
+
+/** A question before sending, with buttons: resolves to the chosen one's value (null: closed). */
+function askBeforeSend({ title, text, buttons }) {
+  return new Promise((resolve) => {
+    const done = (v) => { overlay.remove(); resolve(v); };
+    const overlay = h("div", { class: "overlay center send-check", onclick: (e) => { if (e.target === overlay) done(null); }, onkeydown: (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } } },
+      h("div", { class: "dialog small-dialog", role: "alertdialog", "aria-label": title },
+        h("div", { class: "dialog-head" }, h("h2", {}, title)),
+        h("div", { class: "pad" }, ...[].concat(text).map((t) => (t instanceof Node ? t : h("p", {}, t)))),
+        h("div", { class: "dialog-foot" }, h("span", { class: "grow" }),
+          ...buttons.map((b) => h("button", { type: "button", class: `btn${b.primary ? " btn-primary" : ""}`, onclick: () => done(b.value) }, b.icon ? icon(b.icon) : null, b.label)))));
+    document.body.append(overlay);
+    overlay.querySelector(".btn-primary")?.focus();
+  });
+}
+
 // ------------------------------------------------------------------------------------------------ compose
 let contacts = null;
 async function compose(opts = {}) {
@@ -1367,10 +1431,45 @@ async function compose(opts = {}) {
       return false;
     }
   };
-  /** Placeholders a template left that nothing filled in ({company} with no company known): asked about before it goes. */
-  const okToSend = () => {
+  /**
+   * Before it goes: placeholders a template left that nothing filled in ({company} with no company known), a file
+   * mentioned but not attached, and people in Cc who'd see each other's addresses. Each is asked about.
+   */
+  const okToSend = async () => {
     const left = [...new Set([...`${subjIn.value}\n${editor.innerText}`.matchAll(PLACEHOLDER_RE)].map((x) => x[0]))];
-    return !left.length || confirm(`This email still has ${left.join(", ")} in it. Send it anyway?`);
+    if (left.length && !confirm(`This email still has ${left.join(", ")} in it. Send it anyway?`)) return false;
+    // What you wrote: not the email you're replying to or forwarding (quoted below it).
+    const mine = editor.cloneNode(true);
+    mine.querySelectorAll("blockquote").forEach((q) => q.remove());
+    const forwarding = of && opts.mode === "forward" && of.attachments?.length > 0;
+    const mention = state.prefs?.attach_check !== false && !files.length && !forwarding && attachmentMention(`${subjIn.value}\n${mine.innerText}`);
+    if (mention) {
+      const go = await askBeforeSend({ title: "Did you mean to attach something?", buttons: [
+        { label: "Send without", value: "send" }, { label: "Attach a file", value: "attach", icon: "clip", primary: true }],
+      text: [`You wrote “${mention}”, but nothing is attached.`] });
+      if (go === "attach") fileIn.click();
+      if (go !== "send") return false;
+    }
+    const from = state.mailboxes.find((x) => x.id === fromId)?.address;
+    const already = of ? [of.from?.address, ...(of.to || []).map((a) => a.address), ...(of.cc || []).map((a) => a.address)].filter(Boolean) : [];
+    const exposed = state.prefs?.cc_check !== false ? ccShouldBeBcc(ccIn.value, from, already) : [];
+    if (exposed.length) {
+      const go = await askBeforeSend({ title: "Should these be Bcc?", buttons: [
+        { label: "Send as it is", value: "send" }, { label: "Move to Bcc", value: "bcc", primary: true }],
+      text: [`Everyone in Cc sees everyone else's address: ${exposed.slice(0, 4).join(", ")}${exposed.length > 4 ? ` and ${exposed.length - 4} more` : ""}.`,
+        "If they don't know each other (customers, say), put them in Bcc: each sees only their own address and yours."] });
+      if (go === null) return false;
+      if (go === "bcc") {
+        bccIn.value = [bccIn.value.trim(), ccIn.value.trim()].filter(Boolean).join(", ");
+        ccIn.value = "";
+        bccRow.hidden = false; ccRow.hidden = true;
+        // Nobody left in To: it goes to your own address, with everyone else in Bcc.
+        if (!addressesIn(toIn.value).length && from) toIn.value = from;
+        changed();
+        toast("Moved to Bcc.");
+      }
+    }
+    return true;
   };
   // Undo send: the window goes, and the email waits a few seconds (Settings → Account) before it's sent, with Undo.
   // It's kept on this device meanwhile, so closing the page then leaves it in Drafts, unsent (the browser asks first).
@@ -1397,7 +1496,7 @@ async function compose(opts = {}) {
     el.querySelector("button").focus();
   };
   const sendBtn = h("button", { class: "btn btn-primary", onclick: async () => {
-    if (!okToSend()) return;
+    if (!(await okToSend())) return;
     const delay = shared ? 0 : Number(state.prefs?.undo_send ?? 10);
     if (!delay) { reallySend(); return; }
     sendBtn.disabled = true;
@@ -1407,7 +1506,7 @@ async function compose(opts = {}) {
   } }, "Send");
   // Send later: kept on the server until then, and listed under Scheduled.
   const scheduleAt = async (d) => {
-    if (!okToSend()) return;
+    if (!(await okToSend())) return;
     sendBtn.disabled = true;
     status.textContent = "Scheduling…";
     try {
@@ -2593,7 +2692,15 @@ const SETTINGS = {
         h("label", { class: "field short-field" }, "Wait before sending", h("select", { onchange: async (e) => {
           try { state.prefs = await api("prefs", { method: "POST", body: { undo_send: Number(e.target.value) } }); toast(state.prefs.undo_send ? `Emails wait ${state.prefs.undo_send} seconds before they go.` : "Emails go straight away."); }
           catch (err) { toast(err.message); }
-        } }, [0, 5, 10, 20, 30].map((n) => h("option", { value: String(n), selected: Number(state.prefs?.undo_send ?? 10) === n }, n ? `${n} seconds` : "Don't wait (no Undo)"))))));
+        } }, [0, 5, 10, 20, 30].map((n) => h("option", { value: String(n), selected: Number(state.prefs?.undo_send ?? 10) === n }, n ? `${n} seconds` : "Don't wait (no Undo)"))))),
+      h("section", {}, h("h3", {}, "Before sending"),
+        h("p", { class: "muted" }, "Questions asked when you press Send, in case something's not right."),
+        ...[["attach_check", "Forgotten attachments", "When the email says “see attached”, “I've included…” and the like, but nothing is attached."],
+          ["cc_check", "Cc that should be Bcc", "When people outside your organisation who may not know each other are in Cc, and would see each other's addresses."]].map(([k, label, hint]) =>
+          h("label", { class: "check address" }, h("input", { type: "checkbox", checked: state.prefs?.[k] !== false, onchange: async (e) => {
+            try { state.prefs = await api("prefs", { method: "POST", body: { [k]: e.target.checked } }); toast(e.target.checked ? `${label}: on.` : `${label}: off.`); }
+            catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
+          } }), h("span", {}, h("strong", {}, label), h("small", { class: "muted" }, hint))))));
   },
   templates: () => templateSettings(),
   rules: () => rulesSettings(),

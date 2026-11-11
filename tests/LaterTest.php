@@ -237,9 +237,10 @@ final class LaterTest extends TestCase
     public function testUndoSendDelayIsAPersonalSetting(): void
     {
         $p = new Prefs($this->app);
-        $this->assertSame(['undo_send' => 10], $p->get($this->olive['id']));
-        $this->assertSame(['undo_send' => 30], $p->save($this->olive['id'], ['undo_send' => 30, 'theme' => 'pink']));
-        $this->assertSame(['undo_send' => 30], $p->get($this->olive['id']));
+        $this->assertSame(['undo_send' => 10, 'attach_check' => true, 'cc_check' => true], $p->get($this->olive['id']));
+        $this->assertSame(['undo_send' => 30, 'attach_check' => true, 'cc_check' => true], $p->save($this->olive['id'], ['undo_send' => 30, 'theme' => 'pink']));
+        $this->assertSame(['undo_send' => 30, 'attach_check' => false, 'cc_check' => true], $p->save($this->olive['id'], ['attach_check' => false]));
+        $this->assertSame(['undo_send' => 30, 'attach_check' => false, 'cc_check' => true], $p->get($this->olive['id']));
         $this->fails(fn () => $p->save($this->olive['id'], ['undo_send' => 7]), 422);
     }
 }

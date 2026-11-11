@@ -3,6 +3,11 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.15.0
+- **Forgot the attachment?** If your email says "see attached", "I've included…", "please find enclosed" and the like but nothing is attached, Send asks first: attach a file, or send it anyway. Only what you wrote counts, not the email you're replying to.
+- **Cc that should be Bcc?** When people outside your organisation who may not know each other (different companies, or personal addresses like Gmail) are in Cc, Send asks whether to move them to Bcc, so they don't see each other's addresses. Not asked for colleagues, or on a reply to people already in the conversation.
+- Turn either off under Settings → Account → Before sending. Both also apply to Send later.
+
 ## 1.14.0
 - **Customer panel** beside every email: who it's with, every conversation with them in the mailboxes you can read (where each is up to, and who has it), how many there have been and since when, their address book entry, and the fields GhostParse's parsers found in their email (order number, customer id, plan…), newest first. Open it with the person button above the email or `i`; it stays open on wide screens, and slides over the email on smaller ones. Email from before this version is added to it in the background over the first few minutes.
 - **Where you're signed in**: Settings → Sign-in & alerts lists every browser and installed app you're signed in on, from where and when it was last used. **Sign out** one (it needs your password or passkey again, and its notifications stop), or everywhere else at once. Administrators see anyone's under Users → Devices.
