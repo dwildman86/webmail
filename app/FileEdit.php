@@ -196,6 +196,9 @@ final class FileEdit
             $this->app->db->run('UPDATE {file_nodes} SET version_id = ? WHERE id = ?', [$s['version_id'] ?? $versionId, $nodeId]);
             return false;
         }
+        // Never past the last change the server has: a save can't claim changes that haven't happened (they'd be skipped).
+        $last = (int) $this->app->db->value('SELECT COALESCE(MAX(id), 0) FROM {file_edit_ops} WHERE node_id = ? AND generation = ?', [$nodeId, (int) $s['generation']]);
+        $edit['seq'] = min((int) $edit['seq'], max($last, (int) $s['seq']));
         $replaced = false;
         if ($s['autosave_version_id'] && $user) {
             $prev = $this->app->db->one('SELECT * FROM {file_versions} WHERE id = ? AND node_id = ?', [$s['autosave_version_id'], $nodeId]);

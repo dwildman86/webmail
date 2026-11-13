@@ -18,15 +18,23 @@ final class Imap
     /**
      * @param string $security "ssl" (port 993), "starttls" (port 143), or "none" (tests only)
      */
-    public function __construct(private string $host, private int $port, private string $security = 'ssl', private int $timeout = 20)
+    public function __construct(private string $host, private int $port, private string $security = 'ssl', private int $timeout = 20, private ?string $ip = null)
     {
+    }
+
+    /** Connect to this address (already checked to be on the internet), still checking the certificate against the name. */
+    public function via(?string $ip): self
+    {
+        $this->ip = $ip;
+        return $this;
     }
 
     public function connect(): void
     {
         $ctx = stream_context_create(['ssl' => ['verify_peer' => true, 'verify_peer_name' => true, 'peer_name' => $this->host, 'SNI_enabled' => true]]);
         $scheme = $this->security === 'ssl' ? 'ssl' : 'tcp';
-        $sock = @stream_socket_client("$scheme://{$this->host}:{$this->port}", $errno, $errstr, $this->timeout, STREAM_CLIENT_CONNECT, $ctx);
+        $target = $this->ip !== null ? (str_contains($this->ip, ':') ? "[{$this->ip}]" : $this->ip) : $this->host;
+        $sock = @stream_socket_client("$scheme://$target:{$this->port}", $errno, $errstr, $this->timeout, STREAM_CLIENT_CONNECT, $ctx);
         if (!$sock) {
             $why = $errstr ?: 'no answer';
             if (stripos($why, 'certificate') !== false || stripos($why, 'SSL') !== false) {

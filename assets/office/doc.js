@@ -29,14 +29,14 @@ const hex = (c) => {
 function renderRuns(el, runs) {
   for (const r of runs) {
     const parts = r.text.split("\n");
-    const props = D().props(r);
+    const props = D().props(r); // links only to web, email and phone addresses (whatever a file or a collaborator sent)
     const plain = !Object.keys(props).length;
     parts.forEach((t, i) => {
       if (i > 0) el.append(document.createElement("br"));
       if (!t) return;
       if (plain) { el.append(t); return; }
-      const s = document.createElement(r.href ? "a" : "span");
-      if (r.href) { s.href = r.href; s.target = "_blank"; s.rel = "noopener noreferrer"; s.className = "ox-link"; }
+      const s = document.createElement(props.href ? "a" : "span");
+      if (props.href) { s.href = props.href; s.target = "_blank"; s.rel = "noopener noreferrer"; s.className = "ox-link"; }
       if (r.b) s.style.fontWeight = "700";
       if (r.i) s.style.fontStyle = "italic";
       if (r.u || r.s) s.style.textDecorationLine = [r.u && "underline", r.s && "line-through"].filter(Boolean).join(" ");
@@ -120,7 +120,7 @@ function fmtOf(el, base) {
   if (t === "S" || t === "STRIKE" || t === "DEL") f.s = true;
   if (t === "SUP") f.sup = true;
   if (t === "SUB") f.sub = true;
-  if (t === "A" && el.getAttribute("href")) f.href = el.getAttribute("href");
+  if (t === "A" && D().safeHref(el.getAttribute("href"))) f.href = D().safeHref(el.getAttribute("href"));
   if (t === "FONT") { if (el.getAttribute("color")) f.color = hex(el.getAttribute("color")); if (el.getAttribute("face")) f.font = el.getAttribute("face").split(",")[0].replace(/["']/g, "").trim(); }
   const st = el.style;
   if (st) {
@@ -771,7 +771,7 @@ function mount(host, ctx) {
     const fig = e.target.closest(".ox-fig");
     if (fig && !e.target.closest(".ox-figbar")) selectFigure(fig);
     const a = e.target.closest("a.ox-link");
-    if (a && (e.ctrlKey || e.metaKey || ctx.readOnly)) { e.preventDefault(); window.open(a.href, "_blank", "noopener"); }
+    if (a && (e.ctrlKey || e.metaKey || ctx.readOnly)) { e.preventDefault(); const href = D().safeHref(a.getAttribute("href")); if (href && !href.startsWith("#")) window.open(href, "_blank", "noopener"); }
   });
   $root.addEventListener("pointerdown", (e) => {
     const hdl = e.target.closest(".ox-fig-handle");

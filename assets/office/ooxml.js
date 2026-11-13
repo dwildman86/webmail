@@ -16,9 +16,22 @@ const MAX_UNZIPPED = 300 * 1024 * 1024, MAX_PARTS = 5000;
 
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
 const crc32 = (b) => { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
-async function pipe(bytes, stream) {
-  const out = new Response(new Blob([bytes]).stream().pipeThrough(stream));
-  return new Uint8Array(await out.arrayBuffer());
+/** Bytes through a (de)compression stream, stopping at $max: a file that says it's small can't unpack to gigabytes. */
+async function pipe(bytes, stream, max = Infinity) {
+  const reader = new Blob([bytes]).stream().pipeThrough(stream).getReader();
+  const parts = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) { await reader.cancel(); throw new Error("This file is too big to open here."); }
+    parts.push(value);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
 }
 /** A zip's files: { "word/document.xml": Uint8Array, … }. */
 async function unzip(buf) {
@@ -44,7 +57,7 @@ async function unzip(buf) {
     const lnlen = dv.getUint16(off + 26, true), lxlen = dv.getUint16(off + 28, true);
     const data = b.subarray(off + 30 + lnlen + lxlen, off + 30 + lnlen + lxlen + csize);
     if (method === 0) files[name] = data;
-    else if (method === 8) files[name] = await pipe(data, new DecompressionStream("deflate-raw"));
+    else if (method === 8) { files[name] = await pipe(data, new DecompressionStream("deflate-raw"), Math.min(MAX_UNZIPPED - (total - usize), usize + 1024)); }
     else throw new Error("This file uses compression the editor doesn't know.");
   }
   return files;
@@ -110,6 +123,8 @@ function parseXml(src) {
   }
   return root.children.find((c) => c.name) || root;
 }
+/** Links kept from and written to files: web, email and phone addresses, and places in the document. */
+const safeHref = (h) => { const s = String(h ?? "").trim(); return /^(https?:\/\/|mailto:|tel:|#)/i.test(s) && !/[\u0000-\u001f\u007f]/.test(s) && s.length <= 2000 ? s : null; };
 const local = (n) => (n || "").replace(/^[^:]*:/, "");
 const kids = (el, name) => (el?.children || []).filter((c) => c.name && (name === undefined || local(c.name) === name));
 const kid = (el, name) => kids(el, name)[0];
@@ -414,7 +429,7 @@ async function readDocx(bytes) {
             else if (xn === "footnoteReference" || xn === "endnoteReference") unsupported.add("footnotes");
             else if (xn === "AlternateContent" || xn === "pict" || xn === "object") unsupported.add("shapes, text boxes and objects");
           }
-        } else if (n === "hyperlink") { const href = rels[attr(c, "id")]?.target; pushRuns(c, href ? { ...base, href } : base); }
+        } else if (n === "hyperlink") { const href = safeHref(rels[attr(c, "id")]?.target); pushRuns(c, href ? { ...base, href } : base); }
         else if (n === "ins") { unsupported.add("tracked changes"); pushRuns(c, base); }
         else if (n === "del" || n === "moveFrom") unsupported.add("tracked changes");
         else if (n === "smartTag" || n === "sdt" || n === "customXml" || n === "fldSimple") { if (n === "fldSimple") unsupported.add("fields (page numbers, contents lists)"); pushRuns(n === "sdt" ? kid(c, "sdtContent") || c : c, base); }
@@ -493,12 +508,13 @@ async function writeDocx(doc) {
   const lists = []; // numbering instances: { kind }
   let currentList = null;
   const runXml = (r) => {
-    const pr = [r.href ? '<w:rStyle w:val="Hyperlink"/>' : "", r.font ? `<w:rFonts w:ascii="${esc(r.font)}" w:hAnsi="${esc(r.font)}" w:cs="${esc(r.font)}"/>` : "", r.b ? "<w:b/>" : "", r.i ? "<w:i/>" : "", r.s ? "<w:strike/>" : "",
+    const pr = [safeHref(r.href) ? '<w:rStyle w:val="Hyperlink"/>' : "", r.font ? `<w:rFonts w:ascii="${esc(r.font)}" w:hAnsi="${esc(r.font)}" w:cs="${esc(r.font)}"/>` : "", r.b ? "<w:b/>" : "", r.i ? "<w:i/>" : "", r.s ? "<w:strike/>" : "",
       r.color ? `<w:color w:val="${hex(r.color)}"/>` : "", r.size ? `<w:sz w:val="${Math.round(r.size * 2)}"/><w:szCs w:val="${Math.round(r.size * 2)}"/>` : "",
       r.u ? '<w:u w:val="single"/>' : "", r.bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${hex(r.bg)}"/>` : "", r.sup ? '<w:vertAlign w:val="superscript"/>' : r.sub ? '<w:vertAlign w:val="subscript"/>' : ""].join("");
     const parts = r.text.split(/(\t|\n)/).map((t) => (t === "\t" ? "<w:tab/>" : t === "\n" ? "<w:br/>" : t ? `<w:t xml:space="preserve">${esc(t)}</w:t>` : "")).join("");
     const run = `<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ""}${parts}</w:r>`;
-    return r.href ? `<w:hyperlink r:id="${rel("hyperlink", r.href, true)}">${run}</w:hyperlink>` : run;
+    const href = safeHref(r.href);
+    return href ? `<w:hyperlink r:id="${rel("hyperlink", href, true)}">${run}</w:hyperlink>` : run;
   };
   const para = (b) => {
     if (b.list) { if (!currentList || currentList.kind !== b.list.kind) { currentList = { kind: b.list.kind }; lists.push(currentList); } }

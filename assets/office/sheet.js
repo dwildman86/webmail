@@ -263,7 +263,7 @@ function mount(host, ctx) {
       if (st.i) el.style.fontStyle = "italic";
       if (st.u || st.s) el.style.textDecoration = [st.u && "underline", st.s && "line-through"].filter(Boolean).join(" ");
       if (st.color) el.style.color = st.color;
-      if (st.bg) el.style.background = st.bg;
+      if (st.bg) el.style.backgroundColor = st.bg;
       if (st.font) el.style.fontFamily = `"${st.font}", sans-serif`;
       if (st.size) el.style.fontSize = `${st.size * 4 / 3}px`;
       if (st.wrap) el.classList.add("wrap");
@@ -1174,7 +1174,7 @@ function mount(host, ctx) {
           if (g) { td.rowSpan = g.r2 - g.r1 + 1; td.colSpan = g.c2 - g.c1 + 1; }
           const d = display(s, r, c), st = s.cells.get(`${r},${c}`)?.s || {};
           td.textContent = d.text;
-          if (st.b) td.style.fontWeight = "700"; if (st.i) td.style.fontStyle = "italic"; if (st.bg) td.style.background = st.bg; if (st.color || d.color) td.style.color = d.color || st.color;
+          if (st.b) td.style.fontWeight = "700"; if (st.i) td.style.fontStyle = "italic"; if (st.bg) td.style.backgroundColor = st.bg; if (st.color || d.color) td.style.color = d.color || st.color;
           td.style.textAlign = st.h || (d.num ? "right" : "left");
           if (st.border) for (const [k, side] of [["t", "Top"], ["r", "Right"], ["b", "Bottom"], ["l", "Left"]]) if (st.border[k]) td.style[`border${side}`] = `${st.border[k]}px solid #000`;
         }

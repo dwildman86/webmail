@@ -35,6 +35,10 @@ final class Http
         header('X-Frame-Options: DENY');
         header('Referrer-Policy: no-referrer');
         header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+        // Over HTTPS: browsers keep to HTTPS for this site from now on (this host only, not its subdomains).
+        if (self::isHttps()) {
+            header('Strict-Transport-Security: max-age=31536000');
+        }
     }
 
     public static function isHttps(): bool

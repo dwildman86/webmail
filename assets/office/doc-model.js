@@ -21,10 +21,15 @@
  *   { t: "cell", id, r, c, blocks }                 one table cell's contents
  *   { t: "page", page } / { t: "hf", which: "header" | "footer", blocks }
  */
+/** A link that's safe to show and follow: web, email and phone addresses, and places in the document. Null otherwise. */
+const safeHref = (href) => {
+  const h = String(href ?? "").trim().replace(/[\u0000-\u001f\u007f\s]+/g, (m) => (m.trim() === "" && !/[\u0000-\u001f\u007f]/.test(m) ? "%20" : ""));
+  return /^(https?:\/\/|mailto:|tel:|#)/i.test(h) && h.length <= 2000 ? h : null;
+};
 const RUN_KEYS = ["b", "i", "u", "s", "sup", "sub", "color", "bg", "font", "size", "href"];
 const len = (runs) => runs.reduce((n, r) => n + r.text.length, 0);
 const textOf = (b) => (b.runs || []).map((r) => r.text).join("");
-const props = (r) => { const p = {}; for (const k of RUN_KEYS) if (r[k] !== undefined && r[k] !== null && r[k] !== false) p[k] = r[k]; return p; };
+const props = (r) => { const p = {}; for (const k of RUN_KEYS) if (r[k] !== undefined && r[k] !== null && r[k] !== false) p[k] = r[k]; if (p.href !== undefined) { const h = safeHref(p.href); if (h) p.href = h; else delete p.href; } return p; };
 const same = (a, b) => { for (const k of RUN_KEYS) if ((a[k] ?? null) !== (b[k] ?? null) && !(a[k] === false && b[k] == null) && !(b[k] === false && a[k] == null)) return false; return true; };
 function tidy(runs) {
   const out = [];
@@ -257,5 +262,5 @@ function inverse(doc, op) {
   return null;
 }
 
-return { apply, rebase, inverse, clone, newId, len, textOf, slice, splice, format, tidy, props, same, RUN_KEYS, P_KEYS };
+return { apply, rebase, inverse, clone, newId, len, textOf, slice, splice, format, tidy, props, same, safeHref, RUN_KEYS, P_KEYS };
 });

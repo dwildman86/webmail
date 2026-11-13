@@ -21,7 +21,7 @@ final class PwaTest extends TestCase
         $ec = openssl_pkey_get_details($key)['ec'];
         $auth = random_bytes(16);
         $point = "\x04" . str_pad($ec['x'], 32, "\0", STR_PAD_LEFT) . str_pad($ec['y'], 32, "\0", STR_PAD_LEFT);
-        return ['key' => $key, 'point' => $point, 'auth' => $auth, 'sub' => ['endpoint' => 'https://push.example.net/send/' . bin2hex(random_bytes(6)),
+        return ['key' => $key, 'point' => $point, 'auth' => $auth, 'sub' => ['endpoint' => 'https://fcm.googleapis.com/fcm/send/' . bin2hex(random_bytes(6)),
             'keys' => ['p256dh' => Notifier::b64u($point), 'auth' => Notifier::b64u($auth)]]];
     }
 
@@ -82,7 +82,7 @@ final class PwaTest extends TestCase
         $auth = array_values(array_filter($toPhone['headers'], fn ($h) => str_starts_with($h, 'Authorization:')))[0];
         $this->assertSame(1, preg_match('/^Authorization: vapid t=([^,]+), k=(\S+)$/', $auth, $m));
         [$head, $claims, $sig] = explode('.', $m[1]);
-        $this->assertSame('https://push.example.net', json_decode(Notifier::unb64u($claims), true)['aud']);
+        $this->assertSame('https://fcm.googleapis.com', json_decode(Notifier::unb64u($claims), true)['aud']);
         $this->assertSame($n->vapid()['public'], $m[2]);
         $raw = Notifier::unb64u($sig);
         $der = fn ($i) => "\x02" . chr(strlen($i = (ord($i[0]) & 0x80 ? "\0" : '') . ltrim($i, "\0") ?: "\0")) . $i;
@@ -168,6 +168,34 @@ final class PwaTest extends TestCase
         $client = $this->client('webauthn.get', $options['challenge'], $origin);
         openssl_sign($authData . hash('sha256', $client, true), $sig, $a['key'], OPENSSL_ALGO_SHA256);
         return ['id' => Notifier::b64u($a['id']), 'clientDataJSON' => Notifier::b64u($client), 'authenticatorData' => Notifier::b64u($authData), 'signature' => Notifier::b64u($sig)];
+    }
+
+    public function testPushOnlyGoesToTheBrowsersPushServices(): void
+    {
+        $n = new Notifier($this->app);
+        foreach (['https://fcm.googleapis.com/fcm/send/x', 'https://updates.push.services.mozilla.com/wpush/v2/x', 'https://wns2-db5p.notify.windows.com/w/?token=x',
+            'https://web.push.apple.com/QX'] as $ok) {
+            $this->assertTrue($n->pushHostAllowed($ok), $ok);
+        }
+        foreach (['https://10.0.0.5/hook', 'https://localhost/x', 'https://fcm.googleapis.com.evil.test/x', 'http://fcm.googleapis.com/x',
+            'https://fcm.googleapis.com:8443/x', 'https://user:pw@fcm.googleapis.com/x', 'https://evilfcm.googleapis.com.test/x', 'https://notgoogleapis.com/x'] as $bad) {
+            $this->assertFalse($n->pushHostAllowed($bad), $bad);
+        }
+        $user = (new Auth($this->app))->createUser('pushy@acme.test', 'Pushy', 'correct horse battery');
+        try {
+            $n->subscribe($user, ['endpoint' => 'https://169.254.169.254/latest', 'keys' => $this->device()['sub']['keys']]);
+            $this->fail('an internal address is refused');
+        } catch (HttpError $e) {
+            $this->assertSame('invalid_subscription', $e->errorCode);
+        }
+        // Someone else's subscription isn't theirs to remove.
+        $d = $this->device();
+        $n->subscribe($user, $d['sub']);
+        $other = (new Auth($this->app))->createUser('other@acme.test', 'Other', 'correct horse battery');
+        $n->unsubscribe($other, $d['sub']['endpoint']);
+        $this->assertSame(1, (int) $this->app->db->value('SELECT COUNT(*) FROM {push_subscriptions} WHERE user_id = ?', [$user]));
+        $n->unsubscribe($user, $d['sub']['endpoint']);
+        $this->assertSame(0, (int) $this->app->db->value('SELECT COUNT(*) FROM {push_subscriptions} WHERE user_id = ?', [$user]));
     }
 
     public function testPasskeyRegistersAndSignsIn(): void

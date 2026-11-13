@@ -87,11 +87,27 @@ final class ImportMaildirTest extends TestCase
         $this->assertSame(['done', 5], [$again['status'], $again['imported']]);
     }
 
+    public function testSomeoneWhoIsntAnAdministratorOnlyGetsTheirOwnOldMailbox(): void
+    {
+        // Sam reads support@ here: that's the only old mailbox he sees or can copy. hello@ is a colleague's.
+        $this->assertSame(['support@shop.test'], array_column($this->importer->localMailboxes($this->user), 'address'));
+        try {
+            $this->importer->startMaildir($this->user, $this->mailbox['id'], 'hello@shop.test', [['raw' => '', 'target' => 'inbox']]);
+            $this->fail('copied a colleague\'s mailbox');
+        } catch (HttpError $e) {
+            $this->assertSame(403, $e->status);
+        }
+        $admin = ['role' => 'admin'] + $this->user;
+        $this->assertSame(['hello@shop.test', 'support@shop.test'], array_column($this->importer->localMailboxes($admin), 'address'));
+        $this->assertSame('running', $this->importer->startMaildir($admin, $this->mailbox['id'], 'hello@shop.test', [['raw' => '', 'target' => 'inbox']])['status']);
+    }
+
     public function testOnlyThisAccountsOwnMailFolders(): void
     {
+        $admin = ['role' => 'admin'] + $this->user; // past the same-address rule, to the folder checks
         foreach (['../../etc/passwd@x.y', 'support@../shop.test', 'nobody@shop.test', 'support@other.test'] as $bad) {
             try {
-                $this->importer->startMaildir($this->user, $this->mailbox['id'], $bad, [['raw' => '', 'target' => 'inbox']]);
+                $this->importer->startMaildir($admin, $this->mailbox['id'], $bad, [['raw' => '', 'target' => 'inbox']]);
                 $this->fail("accepted $bad");
             } catch (HttpError $e) {
                 $this->assertSame(404, $e->status, $bad);

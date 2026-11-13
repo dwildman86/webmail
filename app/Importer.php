@@ -15,6 +15,7 @@ namespace Webmail;
  */
 final class Importer
 {
+    private bool $usesNetwork;
     /** GhostParse's message size limit is 25 MB; leave room. */
     public const MAX_MESSAGE_BYTES = 24 * 1024 * 1024;
     /** Upload chunks: under the 32 MB upload limit the webmail asks hosts for. */
@@ -27,6 +28,8 @@ final class Importer
 
     public function __construct(private App $app, ?\Closure $connect = null)
     {
+        // Tests hand in their own connection (no network, no lookups).
+        $this->usesNetwork = $connect === null;
         $this->connect = $connect ?? fn (string $host, int $port, string $security) => new Imap($host, $port, $security);
     }
 
@@ -67,9 +70,33 @@ final class Importer
         return $s;
     }
 
+    /**
+     * The address to connect to: looked up and checked again now (not just when the import was set up), and then used
+     * for the connection itself, so a name that changes what it points at can't reach this server's own network.
+     */
+    private function publicIp(string $host): ?string
+    {
+        if ($this->app->config->get('import_allow_private', false)) {
+            return null;
+        }
+        $ips = @gethostbynamel($host) ?: [];
+        if (!$ips) {
+            throw new HttpError(422, "Couldn't find a server called $host.", 'bad_host');
+        }
+        foreach ($ips as $ip) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                throw new HttpError(422, "$host is a private address: use your old provider's internet address for IMAP.", 'bad_host');
+            }
+        }
+        return $ips[0];
+    }
+
     private function open(array $s): Imap
     {
         $imap = ($this->connect)($s['host'], (int) $s['port'], $s['security']);
+        if ($imap instanceof Imap && $this->usesNetwork) {
+            $imap->via($this->publicIp((string) $s['host']));
+        }
         try {
             $imap->connect();
             if (($s['auth'] ?? 'password') === 'oauth') {
@@ -234,9 +261,13 @@ final class Importer
         return $folders;
     }
 
-    /** The mailboxes on this hosting account, with their folders and where each would go. */
-    public function localMailboxes(): array
+    /**
+     * The mailboxes on this hosting account, with their folders and where each would go. An administrator sees them
+     * all; anyone else only those with the address of a mailbox they read here (their own old email, not a colleague's).
+     */
+    public function localMailboxes(?array $user = null): array
     {
+        $allowed = $user ? $this->localAllowed($user) : null;
         $root = $this->mailRoot();
         if (!$root) {
             return [];
@@ -253,6 +284,9 @@ final class Importer
                 }
                 $folders = array_map(fn ($f) => $f + ['target' => self::suggestTarget(['raw' => $f['name'], 'name' => $f['name'], 'attrs' => []])], self::maildirFolders($path));
                 $folders = array_map(fn ($f) => ['raw' => $f['raw'], 'name' => $f['raw'] === '' ? 'Inbox' : preg_replace('#^INBOX/#', '', $f['name']), 'count' => $f['count'], 'target' => $f['target']], $folders);
+                if ($allowed !== null && !in_array(strtolower("$local@$domain"), $allowed, true)) {
+                    continue;
+                }
                 $out[] = ['address' => "$local@$domain", 'folders' => $folders, 'total' => array_sum(array_column($folders, 'count'))];
             }
         }
@@ -273,9 +307,22 @@ final class Importer
         return $path;
     }
 
+    /** The local mailboxes this person may copy from: null for all (an administrator), else their mailboxes' addresses. */
+    private function localAllowed(array $user): ?array
+    {
+        if (($user['role'] ?? '') === 'admin') {
+            return null;
+        }
+        return array_map(fn ($m) => strtolower((string) $m['address']), (new Mailstore($this->app))->mailboxesFor((int) $user['id']));
+    }
+
     public function startMaildir(array $user, int $mailboxId, string $address, array $choices): array
     {
-        (new Mailstore($this->app))->mailbox($user['id'], $mailboxId);
+        $target = (new Mailstore($this->app))->mailbox($user['id'], $mailboxId);
+        // Reading another mailbox's files needs no password, so only an administrator may copy one into a different mailbox.
+        if (($user['role'] ?? '') !== 'admin' && strtolower(trim($address)) !== strtolower((string) $target['address'])) {
+            throw new HttpError(403, 'You can only copy the old mailbox with the same address. Ask an administrator to copy a different one.', 'forbidden');
+        }
         $path = $this->localPath($address);
         $known = array_column(self::maildirFolders($path), 'name', 'raw');
         $folders = [];

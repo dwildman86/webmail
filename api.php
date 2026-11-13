@@ -69,6 +69,10 @@ try {
         (new \Webmail\Passkeys($app))->route($action, $method, null);
     }
     if ($action === 'logout' && $method === 'POST') {
+        // Another site can't sign people out: the page sends its token, as for every other change.
+        if (!empty($_SESSION['csrf'])) {
+            Auth::checkCsrf();
+        }
         $auth->logout();
         Http::json(['ok' => true]);
     }
@@ -252,7 +256,7 @@ try {
         case 'GET imports':
             Http::json(['imports' => (new Importer($app))->list($user), 'chunk_bytes' => Importer::CHUNK_BYTES]);
         case 'GET import/local':
-            Http::json(['mailboxes' => (new Importer($app))->localMailboxes()]);
+            Http::json(['mailboxes' => (new Importer($app))->localMailboxes($user)]);
         case 'POST import/maildir':
             $in = Http::body();
             Http::json((new Importer($app))->startMaildir($user, (int) ($in['mailbox_id'] ?? 0), (string) ($in['address'] ?? ''), (array) ($in['folders'] ?? [])), 201);

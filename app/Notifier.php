@@ -52,7 +52,7 @@ final class Notifier
                 $this->subscribe($user['id'], (array) ($in['subscription'] ?? []));
                 Http::json(['ok' => true]);
             case 'POST push/unsubscribe':
-                $this->unsubscribe((string) ($in['endpoint'] ?? ''));
+                $this->unsubscribe((int) $user['id'], (string) ($in['endpoint'] ?? ''));
                 Http::json(['ok' => true]);
             case 'POST push/test':
                 $sent = $this->notifyUser($user['id'], ['title' => 'Notifications are on', 'body' => 'You\'ll hear about new email on this device.', 'tag' => 'test', 'url' => './']);
@@ -61,12 +61,36 @@ final class Notifier
         throw new HttpError(404, 'Unknown action', 'not_found');
     }
 
+    /**
+     * The browsers' push services (Chrome and Edge's FCM, Firefox's Mozilla push, Edge on Windows' WNS, Safari's Apple
+     * push). A subscription is only ever one of these: anything else would have this server send requests wherever a
+     * signed-in person asked. Others can be added with 'push_hosts' => ['push.example.com'] in config.php.
+     */
+    private const PUSH_HOSTS = ['fcm.googleapis.com', 'android.googleapis.com', 'updates.push.services.mozilla.com', 'push.services.mozilla.com',
+        'notify.windows.com', 'push.apple.com'];
+
+    public function pushHostAllowed(string $endpoint): bool
+    {
+        $u = parse_url($endpoint);
+        if (($u['scheme'] ?? '') !== 'https' || empty($u['host']) || isset($u['user']) || isset($u['pass']) || (isset($u['port']) && (int) $u['port'] !== 443)) {
+            return false;
+        }
+        $host = strtolower($u['host']);
+        foreach ([...self::PUSH_HOSTS, ...array_map('strval', (array) $this->app->config->get('push_hosts', []))] as $allowed) {
+            $allowed = strtolower(ltrim($allowed, '.'));
+            if ($allowed !== '' && ($host === $allowed || str_ends_with($host, '.' . $allowed))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public function subscribe(int $userId, array $sub): void
     {
         $endpoint = (string) ($sub['endpoint'] ?? '');
         $p256dh = self::unb64u((string) ($sub['keys']['p256dh'] ?? ''));
         $auth = self::unb64u((string) ($sub['keys']['auth'] ?? ''));
-        if (!preg_match('#^https://#', $endpoint) || strlen($p256dh) !== 65 || $p256dh[0] !== "\x04" || strlen($auth) !== 16) {
+        if (!$this->pushHostAllowed($endpoint) || strlen($endpoint) > 1000 || strlen($p256dh) !== 65 || $p256dh[0] !== "\x04" || strlen($auth) !== 16) {
             throw new HttpError(422, 'That isn\'t a valid push subscription', 'invalid_subscription');
         }
         $c = $this->app->crypto;
@@ -79,9 +103,10 @@ final class Notifier
         );
     }
 
-    public function unsubscribe(string $endpoint): void
+    /** One of this person's devices stops: someone else's subscription is left alone. */
+    public function unsubscribe(int $userId, string $endpoint): void
     {
-        $this->app->db->run('DELETE FROM {push_subscriptions} WHERE endpoint_bidx = ?', [$this->app->crypto->blindIndex($endpoint, 'push.endpoint')]);
+        $this->app->db->run('DELETE FROM {push_subscriptions} WHERE endpoint_bidx = ? AND user_id = ?', [$this->app->crypto->blindIndex($endpoint, 'push.endpoint'), $userId]);
     }
 
     /** Called by Inbound for each new email: tells the people who can read the mailbox, unless it went to Spam. */
@@ -225,6 +250,10 @@ final class Notifier
     {
         $body = self::encrypt($payload, self::unb64u($sub['p256dh']), self::unb64u($sub['auth']));
         $vapid = $this->vapid();
+        // Saved before push services were checked: never sent anywhere else.
+        if (!$this->pushHostAllowed((string) $sub['endpoint'])) {
+            return 410;
+        }
         $url = parse_url($sub['endpoint']);
         $jwt = $this->jwt($url['scheme'] . '://' . $url['host'] . (isset($url['port']) ? ':' . $url['port'] : ''), $vapid);
         $headers = ['Content-Type: application/octet-stream', 'Content-Encoding: aes128gcm', 'TTL: 86400', 'Urgency: high',
@@ -234,7 +263,8 @@ final class Notifier
         }
         $ch = curl_init($sub['endpoint']);
         curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10, CURLOPT_CONNECTTIMEOUT => 5]);
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10, CURLOPT_CONNECTTIMEOUT => 5, CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS]);
         curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         curl_close($ch);

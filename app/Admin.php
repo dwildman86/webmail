@@ -21,6 +21,9 @@ final class Admin
             case 'GET admin/users':
                 Http::json(['users' => $this->users()]);
             case 'POST admin/users':
+                if (($in['role'] ?? 'user') === 'admin') {
+                    $this->confirmed($me, $in);
+                }
                 $id = (new Auth($this->app))->createUser((string) ($in['email'] ?? ''), (string) ($in['name'] ?? ''), (string) ($in['password'] ?? ''),
                     ($in['role'] ?? 'user') === 'admin' ? 'admin' : 'user');
                 foreach ((array) ($in['mailbox_ids'] ?? []) as $mb) {
@@ -32,6 +35,7 @@ final class Admin
                 if ($id === $me['id']) {
                     throw new HttpError(422, "You can't reset your own two-step verification here. Change it under Sign-in & alerts.", 'self');
                 }
+                $this->confirmed($me, $in);
                 (new Mfa($this->app))->reset($id);
                 Http::json(['ok' => true]);
             case 'POST admin/users/update':
@@ -96,11 +100,24 @@ final class Admin
         return $out;
     }
 
+    /**
+     * Changes that hand over someone's account or make an administrator need the administrator's own password (or
+     * passkey) again: a session left open, or taken, isn't enough. Given as confirm_password, so it isn't the new password.
+     */
+    private function confirmed(array $me, array $in): void
+    {
+        (new Auth($this->app))->confirm((int) $me['id'], ['password' => (string) ($in['confirm_password'] ?? '')] + (isset($in['passkey']) ? ['passkey' => $in['passkey']] : []));
+    }
+
     private function updateUser(array $me, int $id, array $in): void
     {
         $db = $this->app->db;
-        if (!$db->value('SELECT id FROM {users} WHERE id = ?', [$id])) {
+        $role = $db->value('SELECT role FROM {users} WHERE id = ?', [$id]);
+        if ($role === null || $role === false) {
             throw new HttpError(404, 'User not found', 'not_found');
+        }
+        if ((($in['role'] ?? null) === 'admin' && $role !== 'admin') || !empty($in['password'])) {
+            $this->confirmed($me, $in);
         }
         if ($id === $me['id'] && ((isset($in['role']) && $in['role'] !== 'admin') || !empty($in['disabled']))) {
             throw new HttpError(422, "You can't remove your own administrator access", 'self');

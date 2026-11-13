@@ -1361,7 +1361,7 @@ async function compose(opts = {}) {
   };
   if (lp) {
     // Typed by this person on this device: put back as it was (the page's security policy stops any script in it).
-    editor.innerHTML = lp.html || "";
+    editor.innerHTML = cleanHtml(lp.html || "");
     sigOn.checked = lp.signature !== false;
   } else if (draft) {
     const full = await api("message", { query: { id: String(draft.id), peek: "1" } }).catch(() => null);
@@ -1386,7 +1386,7 @@ async function compose(opts = {}) {
     toIn.value = shared.fields.to; ccIn.value = shared.fields.cc; bccIn.value = shared.fields.bcc; subjIn.value = shared.fields.subject;
     ccRow.hidden = !shared.fields.cc; bccRow.hidden = !shared.fields.bcc;
     sigOn.checked = shared.fields.signature !== false;
-    editor.innerHTML = shared.fields.html;
+    editor.innerHTML = cleanHtml(shared.fields.html);
   }
   const files = [...(local?.attachments || [])];
   const attList = h("div", { class: "compose-atts" });
@@ -1787,13 +1787,20 @@ const fillText = (text, values) => text.replace(PLACEHOLDER_RE, (m, k) => values
  * A template's text as nodes for the editor: simple formatting only (the server keeps only that too), links only to
  * web and mail addresses, and the placeholders that are known filled in (as text, never as HTML).
  */
+/**
+ * HTML for the message box, cleaned: only the formatting the box itself makes (paragraphs, bold, lists, headings,
+ * links to web and mail addresses), no attributes besides those links. For anything not typed in this browser, such as a
+ * colleague's part of a shared reply, which goes into this page.
+ */
+const cleanHtml = (html) => { const d = document.createElement("div"); d.append(templateNodes(html, null)); return d.innerHTML; };
+
 function templateNodes(html, values) {
   const t = document.createElement("template"); // inert: nothing in it runs or loads
   t.innerHTML = html;
   const keep = new Set(["P", "DIV", "BR", "B", "STRONG", "I", "EM", "U", "S", "UL", "OL", "LI", "BLOCKQUOTE", "A", "SPAN", "H1", "H2", "H3", "HR"]);
   const clean = (node) => {
     for (const ch of [...node.childNodes]) {
-      if (ch.nodeType === 3) { ch.textContent = fillText(ch.textContent, values); continue; }
+      if (ch.nodeType === 3) { if (values) ch.textContent = fillText(ch.textContent, values); continue; }
       if (ch.nodeType !== 1) { ch.remove(); continue; }
       if (!keep.has(ch.tagName)) {
         if (["SCRIPT", "STYLE", "TEMPLATE", "IFRAME", "OBJECT", "EMBED", "SVG", "MATH", "IMG"].includes(ch.tagName.toUpperCase())) { ch.remove(); continue; }
@@ -1965,6 +1972,7 @@ const mergeHtml = (base, mine, theirs) => mergeBlocks(blocksOf(base), blocksOf(m
 
 /** Replace the message's content, keeping the cursor where it was (in the same paragraph, at the same place). */
 function setEditorHtml(editor, html) {
+  html = cleanHtml(html);
   if (editor.innerHTML === html) return;
   const sel = getSelection();
   let caret = null;
@@ -2153,6 +2161,13 @@ async function openSettings(tab = "account") {
 function confirmPw(label = "Your password", name = "password") {
   if (state.user?.passkeys_only) return h("p", { class: "muted small" }, "You'll confirm this with your passkey.");
   return h("label", { class: "field" }, label, h("input", { type: "password", name, required: true, autocomplete: "current-password" }));
+}
+
+/** Your own password, for an administrator's changes that need it: a new administrator, someone's password, a two-step reset. */
+function adminConfirm() {
+  if (state.user?.passkeys_only) return h("p", { class: "muted small" }, "Making an administrator, setting a password or resetting two-step verification: you'll confirm with your passkey.");
+  return h("label", { class: "field" }, "Your password", h("small", {}, "Needed to make someone an administrator, set their password or reset their two-step verification."),
+    h("input", { type: "password", name: "confirm_password", autocomplete: "current-password" }));
 }
 
 function formFor(fields, label, onSubmit) {
@@ -2851,6 +2866,7 @@ const SETTINGS = {
           h("label", { class: "field" }, "Role", h("select", { name: "role" }, h("option", { value: "user", selected: u.role === "user" }, "User"), h("option", { value: "admin", selected: u.role === "admin" }, "Administrator"))),
           h("label", { class: "field" }, "New password (leave empty to keep)", h("input", { type: "password", name: "password", minlength: 10, autocomplete: "new-password" })),
           h("label", { class: "check" }, h("input", { type: "checkbox", name: "disabled", checked: u.disabled }), "Can't sign in (disabled)"),
+          adminConfirm(),
           h("div", { class: "field" }, "Mailboxes", boxes(u.mailbox_ids)),
           h("label", { class: "field" }, "Only from these networks (optional)",
             h("small", {}, "IP addresses or ranges, one a line (203.0.113.0/24, 2001:db8::/32). Empty: wherever Settings → Security allows. Signed in from elsewhere, they're signed out."),
@@ -2859,12 +2875,13 @@ const SETTINGS = {
             h("p", { class: "muted small" }, "Lost their phone? A reset removes their authenticator app, passkeys and recovery codes and signs them out. They set up a new one when they next sign in."),
             h("button", { type: "button", class: "btn btn-sm btn-danger", onclick: async () => {
               if (!confirm(`Reset two-step verification for ${u.email}?`)) return;
-              await api("admin/users/mfa-reset", { method: "POST", body: { id: u.id } });
+              try { await api("admin/users/mfa-reset", { method: "POST", body: { id: u.id, confirm_password: dlg.querySelector("[name=confirm_password]")?.value || "" } }); }
+              catch (err) { toast(err.message); return; }
               toast("Reset. They'll set it up again at their next sign-in."); openSettings("admin-users");
             } }, "Reset two-step verification"))],
         "Save", async (v) => {
           await api("admin/users/update", { method: "POST", body: { id: u.id, name: v.name, role: v.role, password: v.password || undefined, disabled: v.disabled === "on", mailbox_ids: pickBoxes(v),
-            allowed_ips: v.allowed_ips || "" } });
+            allowed_ips: v.allowed_ips || "", confirm_password: v.confirm_password || "" } });
           toast("Saved."); openSettings("admin-users");
         }));
       body2.replaceChildren(dlg);
@@ -2877,7 +2894,7 @@ const SETTINGS = {
           h("label", { class: "field grow" }, "Email to sign in with", h("input", { type: "email", name: "email", required: true }))),
           h("label", { class: "field" }, "Password (10+ characters)", h("input", { type: "password", name: "password", minlength: 10, required: true, autocomplete: "new-password" })),
           h("label", { class: "field" }, "Role", h("select", { name: "role" }, h("option", { value: "user" }, "User"), h("option", { value: "admin" }, "Administrator"))),
-          h("div", { class: "field" }, "Mailboxes", boxes([]))],
+          h("div", { class: "field" }, "Mailboxes", boxes([])), adminConfirm()],
         "Add user", async (v) => { await api("admin/users", { method: "POST", body: { ...v, mailbox_ids: pickBoxes(v) } }); toast("User added."); openSettings("admin-users"); })));
   },
   async "admin-mailboxes"() {

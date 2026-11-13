@@ -135,6 +135,19 @@ final class FileEditTest extends TestCase
         $this->assertSame(['X'], array_column(array_column($k['context'], 'op'), 'ins'), 'the saved change they were made without seeing');
     }
 
+    public function testASaveCantClaimChangesThatHaventHappened(): void
+    {
+        $f = $this->files->storeBytes($this->olive, null, 'Notes.txt', 'abc');
+        $this->edit->open($this->olive, $f['id'], 'olive00000000001');
+        $r = $this->edit->sync($this->olive, $f['id'], 'olive00000000001', 1, 0, [['seen' => 0, 'op' => ['t' => 'text', 'at' => 0, 'del' => 0, 'ins' => 'X']]], null);
+        $this->save($this->olive, $f['id'], 'Xabc', ['seq' => 999999, 'generation' => 1]);
+        $later = $this->edit->sync($this->olive, $f['id'], 'olive00000000001', 1, $r['ops'][0]['seq'], [['seen' => $r['ops'][0]['seq'], 'op' => ['t' => 'text', 'at' => 0, 'del' => 0, 'ins' => 'Y']]], null);
+        $k = $this->edit->open($this->olive, $f['id'], 'olive00000000002');
+        $this->assertSame($r['ops'][0]['seq'], $k['base_seq'], 'the save covers what had happened, no further');
+        $this->assertSame(['Y'], array_column(array_column($k['ops'], 'op'), 'ins'), 'the change after it is still there for newcomers');
+        $this->assertNotEmpty($later['ops']);
+    }
+
     public function testComments(): void
     {
         $f = $this->files->storeBytes($this->olive, null, 'Plan.docx', 'PK');

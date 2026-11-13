@@ -49,12 +49,18 @@ final class Inbound
             }
         }
         $db = $this->app->db;
-        if ($id !== '' && $db->value('SELECT id FROM {events} WHERE id = ?', [$id])) {
+        // Claimed first: two copies of one delivery arriving at once can't both be stored. If storing fails, the claim is
+        // let go so GhostParse's retry is taken.
+        if ($id !== '' && $db->run('INSERT IGNORE INTO {events} (id, received_at) VALUES (?, ?)', [$id, App::now()])->rowCount() === 0) {
             return [200, ['ok' => true, 'duplicate' => true]];
         }
-        $stored = (new Mailstore($this->app))->storeInbound($data);
-        if ($id !== '') {
-            $db->run('INSERT IGNORE INTO {events} (id, received_at) VALUES (?, ?)', [$id, App::now()]);
+        try {
+            $stored = (new Mailstore($this->app))->storeInbound($data);
+        } catch (\Throwable $e) {
+            if ($id !== '') {
+                $db->run('DELETE FROM {events} WHERE id = ?', [$id]);
+            }
+            throw $e;
         }
         try {
             (new Team($this->app))->newMail($stored); // a resolved conversation the customer writes to again is open again
