@@ -56,7 +56,15 @@ final class Due
             || (bool) $this->app->db->value('SELECT 1 FROM {waf_rate} WHERE minute < ? LIMIT 1', [intdiv(time(), 60) - 60])
             || $this->receivingUnchecked()
             || $this->checkInDue()
-            || $this->shareDue();
+            || $this->shareDue()
+            || $this->filesDue();
+    }
+
+    /** Files: the bin emptied, abandoned uploads tidied, or stored files being moved to another store. */
+    private function filesDue(): bool
+    {
+        $files = new Files($this->app);
+        return $files->moveDue() || ((int) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'files_cleaned'") < time() - 3600 && $files->cleanupDue());
     }
 
     /** Hourly, when sharing is on and the firewall has seen something since the last report. */
@@ -137,6 +145,19 @@ final class Due
             // Email from before 1.14.0: who it's from and to, for the customer panel (a batch at a time).
             (new Mailstore($this->app))->indexOldParties(300);
             (new Waf($this->app))->cleanup();
+            if ($this->filesDue()) {
+                $files = new Files($this->app);
+                try {
+                    if ($files->moveDue()) {
+                        $files->moveStep(10);
+                    } else {
+                        $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('files_cleaned', ?)", [(string) time()]);
+                        $files->cleanup();
+                    }
+                } catch (\Throwable $e) {
+                    error_log('webmail: Files housekeeping failed: ' . $e->getMessage());
+                }
+            }
             if ($this->shareDue()) {
                 try {
                     $this->shareThreats();

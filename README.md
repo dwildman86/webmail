@@ -114,6 +114,7 @@ marks.
 - **Contacts**: two address books. **My contacts** is private to each person. **Shared** is seen by everyone, and administrators keep it up to date. Add contacts by hand, with **Add to contacts** on any email, or by importing a **.vcf** or **.csv** file from Gmail, Outlook, iPhone or Android. Importing fills in missing details for contacts you already have and never overwrites them. Export either book as a .vcf file. When you write an email, names and addresses are suggested from both books, then from people you've written to before.
 - **Customer panel**: the person button above an email (or `i`) shows who it's with: every conversation with them in the mailboxes you can read, with where each is up to and who has it, how many there have been and since when, their address book entry, and the fields GhostParse's parsers found in their email (an order number, a customer id, a plan), newest first. Click a conversation to open it. To get fields, give the address a parser in GhostParse (Parsers).
 - **Calendar**: see *Calendar* below.
+- **Files**: documents and folders, shared with people and teams, and a private vault: see *Files* below.
 - **Keyboard**: `c` compose, `/` search, `j`/`k` next/previous, `r` reply, `f` forward, `e` archive, `#` delete, `b` snooze, `l` labels, `i` the customer panel, `Esc` close.
 
 ### Calendar
@@ -130,6 +131,39 @@ marks.
 - **On your phone or computer's own calendar**: a calendar's menu → **On your phone or computer** gives a private link to subscribe to in Apple Calendar, Google Calendar or Outlook. It's read-only there and updates every few hours (it's up to the app). Anyone with the link can see the calendar, so keep it to yourself; make a new one there if it gets out, and the old one stops working.
 
 Reminders are sent with the rest of the webmail's due work (see the next section): for reminders on time when nobody has the webmail open, add the `due.php` cron job.
+
+### Files
+
+**Files** in the side menu: documents and folders like OneDrive, encrypted wherever they're stored. Offered while your
+GhostParse plan is active (without one, what's stored can still be opened, downloaded and deleted).
+
+- **Folders and files**: upload by dragging in or with **Upload** (big files go in 8 MB pieces, so hosting upload limits
+  don't matter), make folders, rename, move, copy, search, and download a folder as a ZIP. Images, PDFs, text, audio
+  and video open in the page; everything else downloads (web pages and SVGs are never shown, so nothing in a file
+  runs in the webmail). Each file keeps its earlier versions; deleted things wait in the **Bin** for 30 days.
+- **Sharing**: with a person, or with everyone who reads a mailbox (support@'s team), to view or to edit; a folder's
+  sharing covers everything in it. What anyone adds to your folders is yours, and counts towards your storage.
+- **Share links** (off until an administrator turns them on under **Settings → Files**): anyone with the link can view
+  and download, or, for a folder, send files in (a *file request*, for customers to send you documents). Each can have
+  a password, an expiry and a download limit, and can be turned off; turning links off in Settings stops them all.
+- **With email**: **Save to Files** beside an email's attachments; **Attach from Files** when writing; and an
+  attachment too big to send can go as a link instead.
+- **From other apps**: on Android, Windows and Chrome OS, share a file to the installed webmail and it goes to Files.
+- **Private vault**: files encrypted in your browser before they're uploaded, with a key the server never has. Open
+  it with a passphrase or a passkey (where the passkey supports it), and keep the recovery key it gives you safe: nobody
+  else can open these files, and nobody can recover them if every way in is lost. Vault files can't be shared.
+
+**How files are stored.** Every file (each version) has its own random key; it's cut into 64 KB chunks, each sealed
+with XChaCha20-Poly1305 so it can't be altered, swapped or cut short unnoticed. The key is kept in the database,
+wrapped by the webmail's master key, so the disk or bucket only holds ciphertext under random names, and names are
+encrypted in the database too. Back up the database and `config.php` with your files: without them, files can't be
+opened.
+
+**Where.** On this server (in `storage/files`, which the web server is told never to serve), or an S3-compatible bucket
+(AWS S3, Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean Spaces, MinIO): **Settings → Files**, with **Test
+connection**. After switching, **Move them** copies existing files across a few at a time with the due work. Settings →
+Files also sets each person's storage, the whole webmail's, the largest file, file types not allowed, share-link rules,
+days in the bin and versions kept. `php security-reset.php` turns every share link off.
 
 ### Send later and snooze
 

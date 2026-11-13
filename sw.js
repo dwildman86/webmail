@@ -3,12 +3,12 @@
 "use strict";
 
 // Drafts kept on the device, finished saving here in the background (Background Sync).
-importScripts("assets/drafts.js?v=1.20.0");
+importScripts("assets/drafts.js?v=1.21.0");
 
-const VERSION = "wm-1.20.0";
+const VERSION = "wm-1.21.0";
 const SHELL = `${VERSION}-shell`;
 const MAIL = `${VERSION}-mail`;
-const SHELL_FILES = ["./", "assets/app.css?v=1.20.0", "assets/app.js?v=1.20.0", "assets/calendar.js?v=1.20.0", "assets/pwa.js?v=1.20.0", "assets/drafts.js?v=1.20.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
+const SHELL_FILES = ["./", "assets/app.css?v=1.21.0", "assets/app.js?v=1.21.0", "assets/calendar.js?v=1.21.0", "assets/files.js?v=1.21.0", "assets/pwa.js?v=1.21.0", "assets/drafts.js?v=1.21.0", "assets/icons/icon.svg", "assets/icons/icon-192.png", "manifest.php"];
 // API reads worth keeping for offline: the session, the lists and the messages you open.
 const OFFLINE_READS = new Set(["session", "messages", "message", "body", "contacts", "book", "calendar", "calendar/events"]);
 
@@ -24,6 +24,21 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
+  // Shared from another app to the installed webmail (Share → the webmail): the files wait here until the app,
+  // opened at #files-shared, uploads them to Files. Nothing leaves the device until then.
+  if (req.method === "POST" && url.origin === location.origin && url.searchParams.has("share-target")) {
+    event.respondWith((async () => {
+      const form = await req.formData();
+      const cache = await caches.open("wm-share-target");
+      let n = 0;
+      for (const f of form.getAll("files")) {
+        if (!(f instanceof File)) continue;
+        await cache.put(new Request(`share-target-file?n=${Date.now()}-${n++}&name=${encodeURIComponent(f.name)}`), new Response(f, { headers: { "Content-Type": f.type || "application/octet-stream" } }));
+      }
+      return Response.redirect(new URL("./#files-shared", self.registration.scope).href, 303);
+    })());
+    return;
+  }
   if (req.method !== "GET" || url.origin !== location.origin) return;
   const scope = new URL(self.registration.scope);
   if (!url.pathname.startsWith(scope.pathname)) return;

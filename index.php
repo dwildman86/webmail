@@ -22,7 +22,7 @@ $v = \Webmail\App::VERSION;
 Http::securityHeaders();
 header('Cache-Control: no-cache');
 // Scripts and styles only from here; message bodies are shown in a sandboxed frame from api.php.
-header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; frame-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
+header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
 ?><!doctype html>
 <html lang="en">
 <head>
@@ -41,6 +41,7 @@ header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-sr
   <script src="assets/drafts.js?v=<?= $v ?>" defer></script>
   <script src="assets/app.js?v=<?= $v ?>" defer></script>
   <script src="assets/calendar.js?v=<?= $v ?>" defer></script>
+  <script src="assets/files.js?v=<?= $v ?>" defer></script>
 </head>
 <body>
   <div id="app" data-name="<?= $name ?>"><div class="boot"><span class="logo" aria-hidden="true"></span></div></div>

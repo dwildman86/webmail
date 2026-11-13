@@ -349,6 +349,10 @@ try {
     if ($action === 'customer' && $method === 'GET') {
         Http::json((new \Webmail\Customers($app))->forMessage($user, $int('id')));
     }
+    // Files, the private vault and Settings → Files (before the other admin/ actions).
+    if (str_starts_with($action, 'files') || str_starts_with($action, 'vault') || str_starts_with($action, 'admin/files')) {
+        (new \Webmail\FilesRoutes($app))->route($action, $method, $user);
+    }
     if (str_starts_with($action, 'admin/')) {
         $me = $auth->requireAdmin();
         switch ("$method $action") {

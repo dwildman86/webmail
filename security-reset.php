@@ -33,6 +33,9 @@ $waf = json_decode((string) $app->db->value("SELECT v FROM {meta} WHERE k = 'waf
 $waf['deny'] = [];
 $app->db->run("REPLACE INTO {meta} (k, v) VALUES ('waf', ?)", [json_encode($waf)]);
 echo "The firewall's blocks and block list are cleared (it's still on: Settings → Firewall).\n";
+// Files: every share link off (new ones can be made once things are safe).
+$links = (new \Webmail\FileLinks($app))->revokeEverything();
+echo $links ? "$links Files share link(s) turned off.\n" : "No Files share links were on.\n";
 $opts = getopt('', ['user:']);
 if (!empty($opts['user'])) {
     $n = $app->db->run('UPDATE {users} SET allowed_ips_enc = NULL WHERE email_bidx = ?', [(new Auth($app))->emailIndex((string) $opts['user'])])->rowCount();

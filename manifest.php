@@ -27,4 +27,6 @@ echo json_encode([
         ['src' => 'assets/icons/icon.svg', 'sizes' => 'any', 'type' => 'image/svg+xml'],
     ],
     'shortcuts' => [['name' => 'Compose', 'url' => './#compose', 'icons' => [['src' => 'assets/icons/icon-192.png', 'sizes' => '192x192']]]],
+    // Share → the webmail, from another app (Android, Chrome OS, Windows): the files go to Files (assets/files.js).
+    'share_target' => ['action' => './?share-target', 'method' => 'POST', 'enctype' => 'multipart/form-data', 'params' => ['files' => [['name' => 'files', 'accept' => ['*/*']]]]],
 ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);

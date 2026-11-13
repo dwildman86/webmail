@@ -3,6 +3,16 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.21.0
+- **Files**: documents and folders in the webmail, like OneDrive. Upload by dragging in, in pieces, so hosting upload limits don't matter. Make folders, rename, move, copy, search, download a folder as a ZIP, open images, PDFs, text, audio and video in the page, keep earlier versions, and get things back from the Bin for 30 days. Needs an active GhostParse plan; without one, what's stored can still be opened, downloaded and deleted.
+- **Sharing** with a person, or with everyone who reads a mailbox, to view or to edit. A folder's sharing covers everything inside it.
+- **Share links**, off until an administrator turns them on (Settings → Files). Anyone with the link can view and download, or send files into a folder (a file request). Links can have a password, an expiry and a download limit, and can be turned off. File requests never accept programs.
+- **With email**: Save to Files beside attachments, Attach from Files when writing, and a link instead of an attachment that's too big to send.
+- **Private vault**: files encrypted in your browser with a key the server never has, opened with a passphrase, a passkey or your recovery key. Nobody else can open them.
+- **Encrypted wherever they're kept**: each file has its own key, and is sealed in 64 KB chunks (XChaCha20-Poly1305) on this server or in an S3-compatible bucket (AWS S3, R2, B2, Wasabi, Spaces, MinIO), with no SDK needed. Settings → Files chooses where, tests the bucket, and moves existing files across. It also sets storage limits, the largest file, file types not allowed and share-link rules.
+- On Android, Windows and Chrome OS, a file shared to the installed webmail goes to Files.
+- `php security-reset.php` also turns every share link off.
+
 ## 1.20.0
 - **Sharing attacks with GhostParse**: once an hour, the firewall sends GhostParse a summary of what it refused: the attacking address, the kind of attack, how many times and when. It never sends what was in the requests, or anything about your users or email. Private addresses, your own block list and expired forms are left out. It shows GhostParse what's attacking webmail installs, the first step towards protecting every install from attacks seen on any of them.
 - Turn it off under Settings → Firewall → **Share attacks with GhostParse**, which also shows when the last summary went. Nothing is blocked because of it.

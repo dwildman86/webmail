@@ -181,7 +181,7 @@ final class Waf
         $method = strtoupper((string) ($r['method'] ?? 'GET'));
         $endpoint = (string) ($r['endpoint'] ?? 'api');
         $headers = (array) ($r['headers'] ?? []);
-        $allowed = $endpoint === 'api' ? ['GET', 'POST', 'HEAD'] : ['GET', 'HEAD'];
+        $allowed = in_array($endpoint, ['api', 'share'], true) ? ['GET', 'POST', 'HEAD'] : ['GET', 'HEAD'];
         if (!in_array($method, $allowed, true)) {
             $add('method', 2, $method, 405);
         }

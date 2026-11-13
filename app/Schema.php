@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['waf_events', 'waf_rate', 'waf_ips', 'message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['vault_keys', 'file_activity', 'file_links', 'file_shares', 'file_uploads', 'file_versions', 'file_nodes', 'waf_events', 'waf_rate', 'waf_ips', 'message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -477,6 +477,120 @@ final class Schema
                     agent VARCHAR(200) NULL,
                     KEY event_age (at),
                     KEY event_ip (ip)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Files: folders and files (names encrypted), each file's versions (stored encrypted, on disk or S3, each
+            // with its own key), uploads in progress, sharing with people and mailbox teams, share links, what was done,
+            // and the private vault's keys (wrapped in the browser: the server can't open them).
+            13 => [
+                "CREATE TABLE IF NOT EXISTS {file_nodes} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    owner_id INT UNSIGNED NOT NULL,
+                    parent_id INT UNSIGNED NULL,
+                    kind ENUM('folder','file') NOT NULL,
+                    vault TINYINT(1) NOT NULL DEFAULT 0,
+                    name_enc TEXT NOT NULL,
+                    mime VARCHAR(127) NOT NULL DEFAULT '',
+                    size BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    version_id INT UNSIGNED NULL,
+                    created_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    trashed_at DATETIME NULL,
+                    trash_root TINYINT(1) NOT NULL DEFAULT 0,
+                    KEY node_parent (parent_id),
+                    KEY node_owner (owner_id, parent_id),
+                    KEY node_trash (trashed_at),
+                    FOREIGN KEY (owner_id) REFERENCES {users}(id) ON DELETE CASCADE,
+                    FOREIGN KEY (parent_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_versions} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    node_id INT UNSIGNED NOT NULL,
+                    store VARCHAR(10) NOT NULL,
+                    object_key VARCHAR(80) NOT NULL,
+                    key_enc TEXT NOT NULL,
+                    size BIGINT UNSIGNED NOT NULL,
+                    created_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    KEY version_node (node_id),
+                    UNIQUE KEY version_object (object_key),
+                    FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_uploads} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    token CHAR(32) NOT NULL,
+                    user_id INT UNSIGNED NULL,
+                    link_id INT UNSIGNED NULL,
+                    parent_id INT UNSIGNED NOT NULL,
+                    node_id INT UNSIGNED NULL,
+                    name_enc TEXT NOT NULL,
+                    mime VARCHAR(127) NOT NULL DEFAULT '',
+                    size BIGINT UNSIGNED NOT NULL,
+                    received BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    store VARCHAR(10) NOT NULL,
+                    object_key VARCHAR(80) NOT NULL,
+                    key_enc TEXT NOT NULL,
+                    state TEXT NULL,
+                    created_at DATETIME NOT NULL,
+                    UNIQUE KEY upload_token (token),
+                    KEY upload_age (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_shares} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    node_id INT UNSIGNED NOT NULL,
+                    user_id INT UNSIGNED NULL,
+                    mailbox_id INT UNSIGNED NULL,
+                    role ENUM('viewer','editor') NOT NULL,
+                    created_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    UNIQUE KEY share_who (node_id, user_id, mailbox_id),
+                    KEY share_user (user_id),
+                    KEY share_mailbox (mailbox_id),
+                    FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_links} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    node_id INT UNSIGNED NOT NULL,
+                    token_hash CHAR(64) NOT NULL,
+                    token_enc TEXT NOT NULL,
+                    kind ENUM('view','request') NOT NULL,
+                    password_hash VARCHAR(255) NULL,
+                    expires_at DATETIME NULL,
+                    max_downloads INT UNSIGNED NULL,
+                    downloads INT UNSIGNED NOT NULL DEFAULT 0,
+                    created_by INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    last_used_at DATETIME NULL,
+                    revoked_at DATETIME NULL,
+                    UNIQUE KEY link_token (token_hash),
+                    KEY link_node (node_id),
+                    FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_activity} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    at DATETIME NOT NULL,
+                    node_id INT UNSIGNED NULL,
+                    owner_id INT UNSIGNED NULL,
+                    user_id INT UNSIGNED NULL,
+                    link_id INT UNSIGNED NULL,
+                    action VARCHAR(24) NOT NULL,
+                    detail_enc TEXT NULL,
+                    ip VARCHAR(45) NULL,
+                    KEY activity_node (node_id),
+                    KEY activity_owner (owner_id, at),
+                    KEY activity_age (at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {vault_keys} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT UNSIGNED NOT NULL,
+                    method ENUM('passphrase','passkey','recovery') NOT NULL,
+                    credential_id VARCHAR(255) NULL,
+                    label VARCHAR(100) NULL,
+                    wrapped TEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    KEY vault_user (user_id),
+                    FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

@@ -40,6 +40,13 @@ const ICONS = {
   menu: "M4 7h16 M4 12h16 M4 17h16",
   close: "M6 6l12 12 M18 6L6 18",
   share: "M12 3v12 M8 7l4-4 4 4 M8 11H6v10h12V11h-2",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  file: "M6 3h8l4 4v14H6z M14 3v4h4",
+  lock: "M6 11h12v10H6z M8 11V8a4 4 0 0 1 8 0v3",
+  key: "M14 10a4 4 0 1 0-3.5 4L9 15.5V18H6.5v2.5H4V17l6-6 M15.5 8.5h.01",
+  image: "M4 5h16v14H4z M4 16l5-5 4 4 3-3 4 4 M15 9.5h.01",
+  restore: "M4 12a8 8 0 1 0 2.3-5.7 M4 4v4h4",
+  history: "M12 7v5l3 2 M3.5 12a8.5 8.5 0 1 0 2.5-6",
   homeAdd: "M5 4h14v16H5z M12 8v8 M8 12h8",
   clip: "M16 7l-7.5 7.5a2 2 0 0 0 3 3L19 10a4 4 0 0 0-6-6l-7.5 7.5a6 6 0 0 0 8.5 8.5L20 14",
   unread: "M3 7l9 6 9-6 M3 6h18v12H3z",
@@ -412,9 +419,9 @@ function renderFolders() {
   renderTabbar();
   $search.placeholder = state.folder === "contacts" ? "Search contacts" : "Search mail";
   $search.setAttribute("aria-label", $search.placeholder);
-  $shell.classList.toggle("cal-mode", state.folder === "calendar");
-  $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"], ["calendar", "Calendar", "calendar"]].map(([key, label, ic]) => {
-    const n = key === "scheduled" ? state.scheduledCount : ["starred", "snoozed", "contacts", "calendar"].includes(key) ? 0 : unreadFor(key);
+  $shell.classList.toggle("cal-mode", state.folder === "calendar" || state.folder === "files");
+  $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"], ["calendar", "Calendar", "calendar"], ["files", "Files", "folder"]].map(([key, label, ic]) => {
+    const n = key === "scheduled" ? state.scheduledCount : ["starred", "snoozed", "contacts", "calendar", "files"].includes(key) ? 0 : unreadFor(key);
     return h("li", { class: key === "contacts" ? "sep" : "" }, h("a", { href: "#", class: state.folder === key && !state.query ? "on" : "", onclick: (e) => {
       e.preventDefault();
       openFolder(key);
@@ -529,6 +536,7 @@ function placeholder() {
 // ------------------------------------------------------------------------------------------------ the list
 async function loadList(append = false) {
   if (state.folder === "calendar") return window.Calendar?.showCalendar();
+  if (state.folder === "files") return window.FilesUI?.show();
   if (state.folder === "contacts") return loadContacts();
   if (state.folder === "scheduled" && !state.query) return loadScheduled();
   if (state.folder === "label" && !labelById(state.label)) { state.folder = "inbox"; state.label = 0; renderFolders(); }
@@ -1195,7 +1203,8 @@ function mailCard(t, open) {
   if (inviteSlot) window.Calendar.invitationCard(invite).then((card) => inviteSlot.replaceChildren(card));
   content.append(...[inviteSlot, bar, frame, t.attachments.length > 0 && h("div", { class: "atts" }, t.attachments.map((a) =>
     a.url ? h("a", { class: "att", href: a.url, target: "_blank", rel: "noopener noreferrer" }, icon("clip"), h("span", {}, a.filename), h("small", { class: "muted" }, size(a.size)))
-      : h("a", { class: "att", href: `api.php?a=attachment&id=${a.id}`, download: a.filename }, icon("clip"), h("span", {}, a.filename), h("small", { class: "muted" }, size(a.size)))))].filter(Boolean));
+      : h("span", { class: "att-wrap" }, h("a", { class: "att", href: `api.php?a=attachment&id=${a.id}`, download: a.filename }, icon("clip"), h("span", {}, a.filename), h("small", { class: "muted" }, size(a.size))),
+        window.FilesUI && h("button", { type: "button", class: "icon-btn att-save", title: "Save to Files", "aria-label": `Save ${a.filename} to Files`, onclick: () => window.FilesUI.saveAttachment(a) }, icon("folder")))))].filter(Boolean));
   const recipients = [...(t.to || []), ...(t.cc || [])].map(fmtAddr).join(", ");
   const card = h("article", { class: `mail${open ? "" : " collapsed"}` },
     h("div", { class: "mail-head", onclick: () => { card.classList.toggle("collapsed"); if (!frame.src) load(false); } },
@@ -1383,9 +1392,33 @@ async function compose(opts = {}) {
   const attList = h("div", { class: "compose-atts" });
   const renderAtts = () => attList.replaceChildren(...files.map((f, i) => h("span", { class: "att" }, icon("clip"), h("span", {}, f.filename), h("small", { class: "muted" }, size(f.size)),
     h("button", { type: "button", "aria-label": `Remove ${f.filename}`, onclick: () => { files.splice(i, 1); renderAtts(); changed(); } }, "✕"))));
+  // A link to a file in Files, at the cursor (or the end).
+  const insertLink = (url, name) => {
+    editor.focus();
+    const a = h("a", { href: url }, name);
+    const sel = getSelection();
+    if (sel.rangeCount && editor.contains(sel.anchorNode)) { const r = sel.getRangeAt(0); r.collapse(false); r.insertNode(a); r.setStartAfter(a); }
+    else editor.append(h("p", {}, a));
+    changed();
+  };
+  const fromFiles = async () => {
+    const picked = await window.FilesUI?.pick({ title: "Attach from Files", links: true });
+    if (!picked) return;
+    for (const p of picked.files) {
+      if (picked.asLink) { insertLink(p.url, p.name); continue; }
+      if (files.reduce((n, x) => n + x.size, 0) + p.size > 20 * 1024 * 1024) { toast("Attachments can add up to 20 MB: send a link to the rest instead."); break; }
+      files.push({ filename: p.name, content_type: p.mime || "application/octet-stream", size: p.size, content: p.content });
+    }
+    renderAtts(); changed();
+  };
   const fileIn = h("input", { type: "file", multiple: true, hidden: true, onchange: async () => {
     for (const f of fileIn.files) {
-      if (files.reduce((n, x) => n + x.size, 0) + f.size > 20 * 1024 * 1024) { toast("Attachments can add up to 20 MB."); break; }
+      if (files.reduce((n, x) => n + x.size, 0) + f.size > 20 * 1024 * 1024) {
+        // Too big to attach: Files can send it as a link instead (when share links are on).
+        const link = window.FilesUI && await window.FilesUI.offerLink(f);
+        if (link) { insertLink(link.url, f.name); continue; }
+        toast("Attachments can add up to 20 MB."); break;
+      }
       const content = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(",")[1]); r.readAsDataURL(f); });
       files.push({ filename: f.name, content_type: f.type || "application/octet-stream", size: f.size, content });
     }
@@ -1698,7 +1731,8 @@ async function compose(opts = {}) {
         h("button", { class: "icon-btn", type: "button", title: "List", "aria-label": "Bulleted list", onclick: cmd("insertUnorderedList") }, icon("list")),
         h("button", { class: "icon-btn", type: "button", title: "Quote", "aria-label": "Quote", onclick: cmd("formatBlock", "blockquote") }, icon("quote")),
         h("button", { class: "icon-btn", type: "button", title: "Link", "aria-label": "Link", onclick: () => { const u = prompt("Link address (https://…)"); if (u && /^https?:\/\//i.test(u)) cmd("createLink", u)(); } }, icon("link")),
-        h("button", { class: "icon-btn", type: "button", title: "Attach files", "aria-label": "Attach files", onclick: () => fileIn.click() }, icon("clip")), fileIn, tplBtn),
+        h("button", { class: "icon-btn", type: "button", title: "Attach files", "aria-label": "Attach files", onclick: () => fileIn.click() }, icon("clip")), fileIn,
+        window.FilesUI && h("button", { class: "icon-btn", type: "button", title: "Attach from Files", "aria-label": "Attach from Files", onclick: fromFiles }, icon("folder")), tplBtn),
       editor, sigBox, attList,
       shared && h("p", { class: "muted small shared-note" }, "Everyone writing this sees each change as it's made. Attachments you add are only on your screen until you send."),
       h("div", { class: "compose-foot" }, h("div", { class: "send-group" }, sendBtn, laterBtn), !shared && h("button", { class: "btn", onclick: saveDraft }, "Save draft"), status, h("span", { class: "spacer" }),
@@ -2098,7 +2132,7 @@ async function openSettings(tab = "account") {
   document.querySelector(".overlay.settings-overlay")?.remove();
   const body = h("div", { class: "tab-body" });
   const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["templates", "Templates"], ["rules", "Rules & labels"], ["import", "Import email"], ["security", "Sign-in & alerts"],
-    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-security", "Security"], ["admin-firewall", "Firewall"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
+    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-security", "Security"], ["admin-firewall", "Firewall"], ["admin-files", "Files"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
     nav.replaceChildren(...tabs.map(([k, label]) => h("button", { class: k === key ? "on" : "", "aria-current": k === key ? "page" : null, onclick: () => show(k) }, label)));
@@ -2797,6 +2831,7 @@ const SETTINGS = {
   },
   async "admin-security"() { return securityPolicy(); },
   async "admin-firewall"() { return firewallSettings(); },
+  async "admin-files"() { return filesSettings(); },
   async "admin-users"() {
     const [{ users }, { mailboxes }] = await Promise.all([api("admin/users"), api("admin/mailboxes")]);
     const boxes = (selected) => h("div", {}, mailboxes.map((m) => h("label", { class: "check" }, h("input", { type: "checkbox", name: `mb_${m.id}`, checked: selected.includes(m.id) }), m.address)));
@@ -2960,6 +2995,71 @@ document.addEventListener("keydown", (e) => {
 setInterval(() => { if ($shell && document.visibilityState === "visible" && !document.querySelector(".overlay:not([hidden])")) refresh(); }, 30000);
 document.addEventListener("visibilitychange", () => { if ($shell && document.visibilityState === "visible") refresh(); });
 
+/** Settings → Files (administrators): where files are stored, limits, share links, and who's using what. */
+async function filesSettings() {
+  const f = await api("admin/files");
+  const s = f.settings;
+  const s3 = s.s3 || {};
+  const mb = (n) => (n ? size(n * 1048576) : "no limit");
+  const radio = (name, v, label, hint, checked) => h("label", { class: "check address" }, h("input", { type: "radio", name, value: v, checked }),
+    h("span", {}, h("strong", {}, label), hint && h("small", { class: "muted" }, hint)));
+  const s3Fields = h("div", { class: "s3-fields", hidden: s.store !== "s3" },
+    h("div", { class: "row wrap" }, h("label", { class: "field grow" }, "Endpoint", h("input", { name: "endpoint", value: s3.endpoint || "", placeholder: "https://s3.eu-west-2.amazonaws.com" })),
+      h("label", { class: "field" }, "Region", h("input", { name: "region", value: s3.region || "", placeholder: "eu-west-2 (auto for R2)" }))),
+    h("div", { class: "row wrap" }, h("label", { class: "field grow" }, "Bucket", h("input", { name: "bucket", value: s3.bucket || "" })),
+      h("label", { class: "check" }, h("input", { type: "checkbox", name: "path_style", checked: !!s3.path_style }), h("span", {}, "Path-style addresses (MinIO and some others)"))),
+    h("div", { class: "row wrap" }, h("label", { class: "field grow" }, "Access key", h("input", { name: "access_key", value: s3.access_key || "", autocomplete: "off" })),
+      h("label", { class: "field grow" }, "Secret key", h("input", { type: "password", name: "secret_key", autocomplete: "new-password", placeholder: s3.secret_set ? "Saved (type to change)" : "" }))),
+    h("button", { type: "button", class: "btn", onclick: async (e) => {
+      const form = e.currentTarget.closest("form"); const v = Object.fromEntries(new FormData(form));
+      e.currentTarget.disabled = true;
+      try { await api("admin/files/test-s3", { method: "POST", body: { s3: { endpoint: v.endpoint, region: v.region, bucket: v.bucket, access_key: v.access_key, secret_key: v.secret_key, path_style: !!v.path_style } } }); toast("Connected: the bucket works."); }
+      catch (err) { toast(err.message); }
+      e.currentTarget.disabled = false;
+    } }, "Test connection"));
+  const stored = Object.entries(f.status.stored || {});
+  const elsewhere = stored.filter(([k]) => k !== f.status.store).reduce((n, [, c]) => n + c.files, 0);
+  return h("div", {},
+    !f.allowed && h("div", { class: "notice warn" }, "Files needs an active GhostParse plan. People can still open, download and delete what's stored, but nothing new can be added and share links don't work."),
+    h("section", {}, h("h3", {}, "Storage"),
+      h("p", { class: "muted" }, "Every file is encrypted before it's stored, with its own key, so the disk or bucket only ever holds ciphertext under random names."),
+      stored.length ? h("p", { class: "small" }, stored.map(([k, c]) => `${k === "s3" ? "S3 bucket" : "This server"}: ${c.files} file${c.files === 1 ? "" : "s"}, ${size(c.bytes)}`).join(" · ")) : null,
+      elsewhere > 0 && h("div", { class: "notice info row between" }, h("span", {}, f.status.moving ? `Moving ${elsewhere} file${elsewhere === 1 ? "" : "s"} to ${f.status.store === "s3" ? "the bucket" : "this server"}, a few at a time…`
+        : `${elsewhere} file${elsewhere === 1 ? " is" : "s are"} still on ${f.status.store === "s3" ? "this server" : "the S3 bucket"}. New files go to ${f.status.store === "s3" ? "the bucket" : "this server"}.`),
+        h("button", { class: "btn btn-sm", onclick: async () => { await api("admin/files/move", { method: "POST", body: { on: !f.status.moving } }); openSettings("admin-files"); } }, f.status.moving ? "Stop moving" : "Move them"))),
+    h("section", {}, h("h3", {}, "Settings"),
+      formFor([
+        h("div", { class: "field" }, "Where files are stored",
+          ...[["local", "This server", "In the webmail's storage folder. Simplest: include it in your backups."], ["s3", "An S3-compatible bucket", "AWS S3, Cloudflare R2, Backblaze B2, Wasabi, DigitalOcean Spaces, MinIO…"]]
+            .map(([v, l, hint]) => { const r = radio("store", v, l, hint, s.store === v); r.querySelector("input").addEventListener("change", () => { s3Fields.hidden = v !== "s3"; }); return r; }),
+          s3Fields),
+        h("div", { class: "row wrap" },
+          h("label", { class: "field" }, "Storage each person (MB, 0 = no limit)", h("input", { type: "number", name: "quota_user_mb", min: 0, value: s.quota_user_mb })),
+          h("label", { class: "field" }, "All storage (MB, 0 = no limit)", h("input", { type: "number", name: "quota_total_mb", min: 0, value: s.quota_total_mb })),
+          h("label", { class: "field" }, "Largest file (MB)", h("input", { type: "number", name: "max_file_mb", min: 1, value: s.max_file_mb }))),
+        h("label", { class: "field" }, "File types not allowed", h("small", {}, "Extensions, separated by commas. Files sent in through file requests can never be programs (.exe, .js, .msi and the like)."),
+          h("input", { name: "blocked", value: (s.blocked || []).join(", "), placeholder: "exe, msi" })),
+        h("div", { class: "field" }, "Share links",
+          h("label", { class: "check address" }, h("input", { type: "checkbox", name: "links", checked: s.links }), h("span", {}, h("strong", {}, "Allow share links"),
+            h("small", { class: "muted" }, "Anyone with a link can view and download (or send files into a folder, for a file request). Off by default. Turning it off stops every link at once."))),
+          h("label", { class: "check address" }, h("input", { type: "checkbox", name: "links_password", checked: s.links_password }), h("span", {}, h("strong", {}, "Every link needs a password"))),
+          h("label", { class: "field short-field" }, "Longest a link lasts (days, 0 = no limit)", h("input", { type: "number", name: "links_max_days", min: 0, value: s.links_max_days }))),
+        h("div", { class: "row wrap" },
+          h("label", { class: "field" }, "Days in the bin", h("input", { type: "number", name: "trash_days", min: 1, max: 365, value: s.trash_days })),
+          h("label", { class: "field" }, "Versions kept of each file", h("input", { type: "number", name: "versions", min: 1, max: 100, value: s.versions }))),
+        confirmPw()],
+      "Save", async (v) => {
+        const r = await api("admin/files", { method: "POST", body: { store: v.store, quota_user_mb: Number(v.quota_user_mb), quota_total_mb: Number(v.quota_total_mb), max_file_mb: Number(v.max_file_mb),
+          blocked: v.blocked, links: !!v.links, links_password: !!v.links_password, links_max_days: Number(v.links_max_days), trash_days: Number(v.trash_days), versions: Number(v.versions),
+          s3: { endpoint: v.endpoint || "", region: v.region || "", bucket: v.bucket || "", access_key: v.access_key || "", secret_key: v.secret_key || "", path_style: !!v.path_style }, password: v.password } });
+        toast(r.settings.store !== f.settings.store ? `Saved. New files go to ${r.settings.store === "s3" ? "the bucket" : "this server"}.` : "Saved."); openSettings("admin-files");
+      })),
+    h("section", {}, h("h3", {}, "Who's using what"),
+      h("table", { class: "list" }, h("tr", {}, h("th", {}, "Person"), h("th", {}, "Used"), h("th", {}, "Allowed")),
+        f.people.map((p) => h("tr", {}, h("td", {}, p.name), h("td", {}, size(p.used)), h("td", { class: "muted" }, p.quota ? size(p.quota) : "no limit")))),
+      h("p", { class: "muted small" }, `Each person's limit: ${mb(s.quota_user_mb)}. Private vault files count too; nobody but their owner can open them.`)));
+}
+
 /** The last DNS check per domain, so its answer stays on screen when the page is drawn again. */
 const lastMxCheck = {};
 /**
@@ -3000,7 +3100,11 @@ function receivingSection(domains) {
   return h("section", {}, h("h3", {}, "Receiving email"), ...domains.map(card));
 }
 
-window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo,
+window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo, popMenu, confirmPw, formFor, size, csrf: () => csrf,
+  openFiles: (opts = {}) => {
+    state.folder = "files"; state.label = 0; state.query = ""; $search.value = "";
+    $shell.classList.remove("menu", "reading"); renderFolders(); window.FilesUI?.show(opts);
+  },
   openCalendar: (opts = {}) => {
     state.folder = "calendar"; state.label = 0; state.query = ""; $search.value = "";
     $shell.classList.remove("menu", "reading"); renderFolders(); window.Calendar?.showCalendar(opts);
