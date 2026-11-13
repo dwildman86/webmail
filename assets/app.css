@@ -945,3 +945,15 @@ table.list .pill { white-space: nowrap; }
   .files-preview { padding: 0; }
   .files-preview-box { height: 100dvh; border-radius: 0; }
 }
+
+/* ------------------------------------------------------------------ Files → New: templates (1.22.0) */
+.files-templates { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+.files-template { display: flex; flex-direction: column; gap: 8px; align-items: stretch; padding: 0; border: 0; background: none; cursor: pointer; text-align: left; font-weight: 550; color: var(--text); }
+.files-template-art { position: relative; aspect-ratio: 3 / 4; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff;
+  background-image: linear-gradient(#d4d9e1, #d4d9e1), linear-gradient(#e6e9ee, #e6e9ee), linear-gradient(#e6e9ee, #e6e9ee), linear-gradient(#e6e9ee, #e6e9ee);
+  background-size: 55% 7px, 76% 4px, 70% 4px, 62% 4px; background-position: 14% 16%, 14% 30%, 14% 38%, 14% 46%; background-repeat: no-repeat; }
+.files-template:hover .files-template-art, .files-template:focus-visible .files-template-art { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.files-template-art.blank { background-image: none; }
+.files-template-art.spreadsheet { background-image: linear-gradient(to right, #e3e6ea 1px, transparent 1px), linear-gradient(to bottom, #e3e6ea 1px, transparent 1px), linear-gradient(#dbe5f1, #dbe5f1);
+  background-size: 25% 100%, 100% 9%, 100% 9%; background-position: 0 0, 0 0, 0 9%; background-repeat: repeat, repeat, no-repeat; }
+.files-template-art.spreadsheet.blank { background-image: linear-gradient(to right, #e3e6ea 1px, transparent 1px), linear-gradient(to bottom, #e3e6ea 1px, transparent 1px); background-size: 25% 100%, 100% 9%; }

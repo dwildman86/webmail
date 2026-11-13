@@ -232,6 +232,9 @@ async function readXlsx(bytes) {
     sheets.push(sheet);
   }
   if (!sheets.length) throw new Error("This spreadsheet has no sheets the editor can read.");
+  // The editors' own sheet ids, if this file was saved by them (everyone editing must use the same ones).
+  const ids = (readCustom(files).WebmailSheetIds || "").split(" ").filter(Boolean);
+  if (ids.length === sheets.length && new Set(ids).size === ids.length) sheets.forEach((sh, i) => { sh.id = ids[i]; });
   return { sheets, unsupported: [...unsupported] };
 }
 
@@ -290,11 +293,22 @@ async function writeXlsx(wb, values) {
   out["xl/styles.xml"] = XML_HEAD + `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${numFmts.size ? `<numFmts count="${numFmts.size}">${[...numFmts].map(([code, id]) => `<numFmt numFmtId="${id}" formatCode="${esc(code)}"/>`).join("")}</numFmts>` : ""}<fonts count="${fonts.length}">${fonts.join("")}</fonts><fills count="${fills.length}">${fills.join("")}</fills><borders count="${borders.length}">${borders.join("")}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
   out["xl/workbook.xml"] = XML_HEAD + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}"${s.hidden ? ' state="hidden"' : ""} r:id="rId${i + 1}"/>`).join("")}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`;
   out["xl/_rels/workbook.xml.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wb.sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${wb.sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId${wb.sheets.length + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>`;
-  out["_rels/.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`;
+  out["_rels/.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>${CUSTOM_REL}</Relationships>`;
   out["docProps/core.xml"] = coreXml();
-  out["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
+  out["docProps/custom.xml"] = customXml({ WebmailSheetIds: wb.sheets.map((sh) => sh.id).join(" ") });
+  out["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${CUSTOM_TYPE}<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
   return zip(out);
 }
+/** Custom document properties (docProps/custom.xml): kept by Word and Excel. The editors keep their ids there. */
+function readCustom(files) {
+  const out = {};
+  if (!files["docProps/custom.xml"]) return out;
+  for (const p of kids(parseXml(files["docProps/custom.xml"]), "property")) out[p.attrs.name] = textOf(p);
+  return out;
+}
+const customXml = (props) => XML_HEAD + `<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">${Object.entries(props).map(([k, v], i) => `<property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="${i + 2}" name="${esc(k)}"><vt:lpwstr>${esc(v)}</vt:lpwstr></property>`).join("")}</Properties>`;
+const CUSTOM_REL = '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/>';
+const CUSTOM_TYPE = '<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>';
 const coreXml = () => XML_HEAD + `<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dcterms:modified xsi:type="dcterms:W3CDTF">${new Date().toISOString().replace(/\.\d+Z$/, "Z")}</dcterms:modified></cp:coreProperties>`;
 
 // ------------------------------------------------------------------------------------------------ CSV
@@ -337,6 +351,9 @@ const TWIP_MM = 1440 / 25.4;
 
 async function readDocx(bytes) {
   const files = await unzip(bytes);
+  // Ids worked out from the file itself, so everyone who opens it gets the same ones.
+  let seqId = 0;
+  const newId = () => "k" + (seqId++).toString(36);
   const unsupported = new Set();
   if (files["word/vbaProject.bin"]) unsupported.add("macros");
   const docPart = "word/document.xml";
@@ -441,7 +458,17 @@ async function readDocx(bytes) {
   if (files["word/comments.xml"]) unsupported.add("Word comments");
   if (files["word/footnotes.xml"] && deep(parseXml(files["word/footnotes.xml"]), "footnote").length > 2) unsupported.add("footnotes");
   if (!blocks.length) blocks.push({ id: newId(), type: "p", runs: [] });
-  return { doc: { page, blocks, header: header || null, footer: footer || null }, unsupported: [...unsupported] };
+  // Saved by the editors: their ids for each block ("~" marks the empty paragraph Word needs after a table, not one of theirs).
+  const ids = (readCustom(files).WebmailBlockIds || "").split(" ").filter(Boolean);
+  let out = blocks;
+  if (ids.length === blocks.length) {
+    out = blocks.map((b, i) => ({ ...b, id: ids[i] })).filter((b) => b.id !== "~");
+    const seen = new Set();
+    for (const b of out) { if (seen.has(b.id)) b.id = newId(); seen.add(b.id); }
+    if (!out.length) out = [{ id: newId(), type: "p", runs: [] }];
+  }
+  if (out[out.length - 1].type !== "p") out.push({ id: newId(), type: "p", runs: [] });
+  return { doc: { page, blocks: out, header: header || null, footer: footer || null }, unsupported: [...unsupported] };
 }
 /** Neighbouring runs with the same formatting joined. */
 function merge(runs) {
@@ -513,7 +540,13 @@ async function writeDocx(doc) {
   const m = page.margins || { t: 25, r: 25, b: 25, l: 25 };
   const avail = Math.round((pw - (m.l + m.r) * TWIP_MM) / 15);
   const list = doc.blocks || [];
-  const body = list.map((b, i) => block(b.type === "table" && (i === list.length - 1 || list[i + 1].type === "table") ? { ...b, needsPara: true } : b, avail)).join("");
+  const ids = [];
+  const body = list.map((b, i) => {
+    const filler = b.type === "table" && (i === list.length - 1 || list[i + 1].type === "table");
+    const xml = block(filler ? { ...b, needsPara: true } : b, avail);
+    if (xml) { ids.push(b.id || "~"); if (filler) ids.push("~"); }
+    return xml;
+  }).join("");
   const files = {};
   const hf = (kind, blocks) => { if (!blocks?.length) return ""; const name = `${kind}1.xml`; currentList = null; files[`word/${name}`] = XML_HEAD + `<w:${kind === "header" ? "hdr" : "ftr"} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${blocks.map((b) => block(b, avail)).join("")}</w:${kind === "header" ? "hdr" : "ftr"}>`; return `<w:${kind}Reference w:type="default" r:id="${rel(kind, name)}"/>`; };
   const hdr = hf("header", doc.header), ftr = hf("footer", doc.footer);
@@ -526,11 +559,12 @@ async function writeDocx(doc) {
   const heading = (id, name, size, extra = "") => `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="${+id.slice(-1) - 1 || 0}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${size}"/>${extra}</w:rPr></w:style>`;
   files["word/styles.xml"] = XML_HEAD + `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="120"/></w:pPr><w:rPr><w:sz w:val="56"/></w:rPr></w:style>${heading("Heading1", "heading 1", 36)}${heading("Heading2", "heading 2", 30)}${heading("Heading3", "heading 3", 26)}${heading("Heading4", "heading 4", 22, "<w:i/>")}<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:ind w:left="720" w:right="720"/></w:pPr><w:rPr><w:i/><w:color w:val="404040"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Code"><w:name w:val="HTML Preformatted"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="40"/><w:contextualSpacing/></w:pPr></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`;
   files["word/_rels/document.xml.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>${rels.map(([id, type, target, ext]) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${esc(target)}"${ext ? ' TargetMode="External"' : ""}/>`).join("")}</Relationships>`;
-  files["_rels/.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`;
+  files["_rels/.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>${CUSTOM_REL}</Relationships>`;
   files["docProps/core.xml"] = coreXml();
+  files["docProps/custom.xml"] = customXml({ WebmailBlockIds: ids.map((x) => String(x).replace(/\s/g, "")).join(" ") });
   const exts = [...new Set(Object.keys(media).map((n) => n.split(".").pop()))];
   const MIME = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp" };
-  files["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${exts.map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join("")}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${files["word/header1.xml"] ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : ""}${files["word/footer1.xml"] ? '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
+  files["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${exts.map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join("")}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${files["word/header1.xml"] ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : ""}${files["word/footer1.xml"] ? '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>${CUSTOM_TYPE}</Types>`;
   return zip({ ...files, ...media });
 }
 

@@ -118,6 +118,23 @@ final class FileEditTest extends TestCase
         $this->fails(fn () => $this->edit->open($this->sam, $f['id'], 'sam0000000000001'), 404);
     }
 
+    public function testOpeningMidSessionGetsWhatUnsavedChangesWereMadeAgainst(): void
+    {
+        $f = $this->files->storeBytes($this->olive, null, 'Plan.txt', 'abc');
+        $this->files->share($this->olive, $f['id'], $this->sam['id'], null, 'editor');
+        $this->edit->open($this->olive, $f['id'], 'olive00000000001');
+        $this->edit->open($this->sam, $f['id'], 'sam0000000000001');
+        // Both type at once, neither having seen the other's change; then Olive's browser saves up to her own.
+        $a = $this->edit->sync($this->olive, $f['id'], 'olive00000000001', 1, 0, [['seen' => 0, 'op' => ['t' => 'text', 'at' => 0, 'del' => 0, 'ins' => 'X']]], null);
+        $this->edit->sync($this->sam, $f['id'], 'sam0000000000001', 1, 0, [['seen' => 0, 'op' => ['t' => 'text', 'at' => 3, 'del' => 0, 'ins' => 'Y']], ['seen' => 0, 'op' => ['t' => 'text', 'at' => 4, 'del' => 0, 'ins' => 'Z']]], null);
+        $this->save($this->olive, $f['id'], 'Xabc', ['seq' => $a['ops'][0]['seq'], 'generation' => 1]);
+        $k = $this->edit->open($this->sam, $f['id'], 'sam0000000000002');
+        $this->assertSame($a['ops'][0]['seq'], $k['base_seq']);
+        $this->assertSame(['Y', 'Z'], array_column(array_column($k['ops'], 'op'), 'ins'), "Sam's two, one after the other");
+        $this->assertSame($k['ops'][0]['seq'] + 1, $k['ops'][1]['seq'], 'one batch is stored together');
+        $this->assertSame(['X'], array_column(array_column($k['context'], 'op'), 'ins'), 'the saved change they were made without seeing');
+    }
+
     public function testComments(): void
     {
         $f = $this->files->storeBytes($this->olive, null, 'Plan.docx', 'PK');

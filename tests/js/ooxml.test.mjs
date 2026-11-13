@@ -165,3 +165,19 @@ test("unsupported parts are listed, not lost silently", async () => {
   const back = await O.readXlsx(await bytes(await O.zip(z)));
   assert.deepEqual(back.unsupported.sort(), ["charts", "macros"]);
 });
+
+test("the editors' ids survive saving, so everyone editing agrees on them; files from elsewhere get the same ids for everyone", async () => {
+  const doc = { page: { size: "A4" }, blocks: [{ id: "bA", type: "p", runs: [{ text: "One" }] }, { id: "bT", type: "table", rows: [{ cells: [{ blocks: [{ id: "c", type: "p", runs: [{ text: "x" }] }] }] }] }], header: null, footer: null };
+  const back = await O.readDocx(await bytes(await O.writeDocx({ ...doc, blocks: [...doc.blocks, { id: "bE", type: "p", runs: [] }] })));
+  assert.deepEqual(back.doc.blocks.map((b) => b.id), ["bA", "bT", "bE"]);
+  const ending = await O.readDocx(await bytes(await O.writeDocx(doc)));
+  assert.equal(ending.doc.blocks.length, 3, "a document always ends with a paragraph to type in");
+  assert.deepEqual(ending.doc.blocks.slice(0, 2).map((b) => b.id), ["bA", "bT"]);
+  const z = await O.unzip(await bytes(await O.writeDocx(doc)));
+  delete z["docProps/custom.xml"];
+  const a = await O.readDocx(await bytes(await O.zip(z))), b = await O.readDocx(await bytes(await O.zip(z)));
+  assert.deepEqual(a.doc.blocks.map((x) => x.id), b.doc.blocks.map((x) => x.id));
+  const wb = { sheets: [{ ...workbook().sheets[0], id: "sXYZ" }, { ...workbook().sheets[1], id: "s9" }] };
+  const xb = await O.readXlsx(await bytes(await O.writeXlsx(wb, values(wb))));
+  assert.deepEqual(xb.sheets.map((s) => s.id), ["sXYZ", "s9"]);
+});

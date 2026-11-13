@@ -19,6 +19,56 @@ const fmtWhen = (iso) => {
 };
 const VIEWS = [["mine", "My files", "folder"], ["shared", "Shared with me", "people"], ["recent", "Recent", "clock"], ["vault", "Private vault", "lock"], ["trash", "Bin", "trash"]];
 const kindIcon = (it) => it.kind === "folder" ? "folder" : /^image\//.test(it.mime) ? "image" : "file";
+/** Files the editors open: documents, spreadsheets, text. */
+const EDITABLE = /\.(docx|xlsx|csv|txt|md)$/i;
+const editable = (it) => it.kind === "file" && EDITABLE.test(it.name || "") && FS.view !== "vault" && FS.view !== "trash";
+
+// ------------------------------------------------------------------------------------------------ the editors (assets/office), loaded the first time they're needed
+
+let officeLoading = null;
+function loadOffice() {
+  if (officeLoading) return officeLoading;
+  const v = (document.querySelector('script[src*="files.js"]')?.getAttribute("src") || "").split("?v=")[1] || "";
+  document.head.append(W().h("link", { rel: "stylesheet", href: `assets/office/office.css?v=${v}` }));
+  const names = ["formula", "ooxml", "collab", "sheet-model", "doc-model", "editor", "text", "sheet", "doc", "templates"];
+  // In order (async off), all requested at once.
+  officeLoading = Promise.all(names.map((n) => new Promise((ok, bad) => {
+    const el = document.createElement("script");
+    el.src = `assets/office/${n}.js?v=${v}`;
+    el.async = false;
+    el.onload = ok;
+    el.onerror = () => bad(new Error("The editor couldn't be loaded. Check your connection and try again."));
+    document.head.append(el);
+  })));
+  officeLoading.catch(() => { officeLoading = null; });
+  return officeLoading;
+}
+async function openEditor(it) {
+  try { await loadOffice(); } catch (err) { W().toast(err.message); return; }
+  window.OfficeEditor.open(it, { onClose: () => { if (document.querySelector(".files")) show(); } });
+}
+/** Files → New: a document, spreadsheet or text file, from a template, opened to edit. */
+async function newOffice(kind) {
+  try { await loadOffice(); } catch (err) { W().toast(err.message); return; }
+  const { h } = W();
+  const ext = { document: "docx", spreadsheet: "xlsx", text: "txt" }[kind];
+  const templates = window.OfficeTemplates[kind] || [{ id: "blank", name: "Blank", make: () => window.OfficeKinds.text.blank() }];
+  const chosen = templates.length === 1 ? templates[0] : await dialog(kind === "document" ? "New document" : "New spreadsheet", (body, done) => {
+    body.append(h("div", { class: "files-templates" }, templates.map((t) => h("button", { type: "button", class: "files-template", onclick: () => done(t) },
+      h("span", { class: `files-template-art ${kind} ${t.id}` }), h("span", {}, t.name)))));
+  }, { wide: true });
+  if (!chosen) return;
+  const base = chosen.id === "blank" ? (kind === "document" ? "Untitled document" : kind === "spreadsheet" ? "Untitled spreadsheet" : "Notes") : chosen.name;
+  const name = await ask("Name", "Name", `${base}.${ext}`);
+  if (!name) return;
+  const finalName = new RegExp(`\\.${ext}$`, "i").test(name) || (kind === "spreadsheet" && /\.csv$/i.test(name)) || (kind === "text" && /\.md$/i.test(name)) ? name : `${name}.${ext}`;
+  try {
+    const blob = await window.OfficeKinds[kind].save(chosen.make(), { name: finalName });
+    const node = await uploadOne(new File([blob], finalName, { type: blob.type }), FS.folder, { track: false, name: finalName });
+    show();
+    openEditor({ ...node, name: node?.name || finalName, role: "owner" });
+  } catch (err) { W().toast(err.message); }
+}
 
 // ------------------------------------------------------------------------------------------------ dialogs
 
@@ -95,7 +145,11 @@ function render() {
   const head = h("div", { class: "files-head" },
     h("div", { class: "files-title" }, h("h2", {}, title), crumbs),
     h("div", { class: "files-actions" }, search,
-      canAdd && h("button", { class: "btn", type: "button", onclick: newFolder }, icon("folder"), "New folder"),
+      canAdd && h("button", { class: "btn", type: "button", "aria-haspopup": "menu", onclick: (e) => W().popMenu(e.currentTarget, [
+        { label: "Folder", icon: "folder", run: newFolder },
+        { label: "Document", icon: "file", hint: ".docx", run: () => newOffice("document") },
+        { label: "Spreadsheet", icon: "layers", hint: ".xlsx", run: () => newOffice("spreadsheet") },
+        { label: "Text file", icon: "note", hint: ".txt", run: () => newOffice("text") }]) }, icon("compose"), "New"),
       canAdd && h("button", { class: "btn btn-primary", type: "button", onclick: () => fileIn.click() }, icon("upload"), "Upload"), fileIn,
       d.view === "trash" && d.items.length > 0 && h("button", { class: "btn", type: "button", onclick: emptyBin }, "Empty bin")));
   const notice = !d.allowed ? h("div", { class: "notice warn" }, "Adding files needs an active GhostParse plan. Your files are still here to open, download or delete.")
@@ -113,7 +167,7 @@ function render() {
 
 function row(it) {
   const { h, icon } = W();
-  const open = () => it.kind === "folder" ? (FS.view === "trash" ? null : show({ folder: it.id })) : FS.view === "trash" ? null : preview(it);
+  const open = () => it.kind === "folder" ? (FS.view === "trash" ? null : show({ folder: it.id })) : FS.view === "trash" ? null : editable(it) ? openEditor(it) : preview(it);
   const more = h("button", { type: "button", class: "icon-btn", "aria-label": `More for ${it.name}`, onclick: (e) => { e.stopPropagation(); W().popMenu(e.currentTarget, menuFor(it)); } }, icon("more"));
   return h("div", { class: "files-row", role: "row", tabindex: "0", onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); },
     oncontextmenu: (e) => { e.preventDefault(); W().popMenu(more, menuFor(it)); } },
@@ -130,7 +184,9 @@ function menuFor(it) {
       { label: "Delete for good", icon: "trash", class: "danger", run: async () => { if (confirm(`Delete “${it.name}” for good? It can't be undone.`)) act("files/delete", { id: it.id }, "Deleted."); } }];
   }
   if (it.kind === "file") {
-    items.push({ label: "Open", icon: "eye", run: () => preview(it) }, { label: "Download", icon: "download", run: () => download(it) });
+    if (editable(it)) items.push({ label: edit && FS.data?.allowed ? "Edit" : "Open", icon: edit && FS.data?.allowed ? "compose" : "eye", run: () => openEditor(it) });
+    else items.push({ label: "Open", icon: "eye", run: () => preview(it) });
+    items.push({ label: "Download", icon: "download", run: () => download(it) });
   } else {
     items.push({ label: "Open", icon: "folder", run: () => show({ folder: it.id }) }, { label: "Download as ZIP", icon: "download", run: () => { location.href = `api.php?a=files/zip&id=${it.id}`; } });
   }
@@ -763,7 +819,7 @@ const Vault = (() => {
   return { show, label, lock };
 })();
 
-window.FilesUI = { show, saveAttachment, pick, offerLink, takeShared, vault: Vault };
+window.FilesUI = { show, saveAttachment, pick, offerLink, takeShared, vault: Vault, share: shareDialog, versions: versionsDialog, openEditor, loadOffice };
 if (location.hash === "#files-shared") {
   history.replaceState(null, "", location.pathname);
   const wait = setInterval(() => { if (W()?.state?.user) { clearInterval(wait); takeShared().catch(() => {}); } }, 300);

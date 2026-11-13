@@ -117,7 +117,8 @@ function apply(doc, op) {
       return "all";
     }
     case "delete":
-      if (!b || doc.blocks.length < 2) { if (b) doc.blocks[i] = { id: b.id, type: "p", runs: [] }; return b ? "all" : null; }
+      // A document always ends with a paragraph (somewhere to type after a table or picture): that one is emptied instead.
+      if (!b || doc.blocks.length < 2 || (i === doc.blocks.length - 1 && doc.blocks[i - 1]?.type !== "p")) { if (b) doc.blocks[i] = { id: b.id, type: "p", runs: [] }; return b ? "all" : null; }
       doc.blocks.splice(i, 1);
       return "all";
     case "replace":

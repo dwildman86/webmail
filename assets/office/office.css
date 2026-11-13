@@ -1,0 +1,224 @@
+/* The editors for documents, spreadsheets and text files (assets/office). The page and the grid stay white in dark
+   mode, as files' own colours are chosen for paper; everything around them follows the device. */
+body.ox-open { overflow: hidden; }
+.ox { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+.ox-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; padding-top: max(6px, env(safe-area-inset-top)); background: var(--panel); border-bottom: 1px solid var(--line); min-height: 52px; }
+.ox-bar .grow { flex: 1; }
+.ox-icon { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }
+.ox-icon svg { width: 18px; height: 18px; }
+.ox-title { display: flex; flex-direction: column; min-width: 0; margin-left: 4px; }
+.ox-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46vw; font-size: 15px; }
+.ox-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ox-status.bad { color: var(--warn); }
+.ox-tool { position: relative; display: inline-grid; place-items: center; min-width: 34px; height: 34px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; flex: none; }
+.ox-tool svg { width: 18px; height: 18px; }
+.ox-tool:hover { background: var(--panel-2); }
+.ox-tool.on { background: var(--accent-soft); color: var(--accent); }
+.ox-tool:disabled { opacity: .35; cursor: default; background: transparent; }
+.ox-badge { position: absolute; top: 2px; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700; line-height: 16px; }
+.ox-people { display: flex; margin-right: 6px; }
+.ox-avatar { display: inline-grid; place-items: center; width: 28px; height: 28px; margin-left: -6px; border-radius: 50%; border: 2px solid var(--panel); color: #fff; font-size: 11px; font-weight: 700; background: var(--muted); }
+.ox-avatar.more { background: var(--line-strong); color: var(--text); }
+.ox-toolbar { display: flex; align-items: center; gap: 2px; padding: 4px 8px; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: thin; min-height: 44px; }
+.ox-toolbar:empty { display: none; }
+.ox-sep { width: 1px; height: 22px; margin: 0 4px; background: var(--line); flex: none; }
+.ox-select { height: 32px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); max-width: 150px; flex: none; }
+.ox-select.ox-size { width: 64px; }
+.ox-select.ox-fmt { width: 128px; }
+.ox-select.ox-style { width: 128px; }
+.ox-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 14px; background: var(--accent-soft); font-size: 13.5px; border-bottom: 1px solid var(--line); }
+.ox-banner.warn { background: var(--warn-soft); }
+.ox-banner .grow { flex: 1; min-width: 200px; }
+.ox-main { flex: 1; display: flex; min-height: 0; }
+.ox-body { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.ox-fail { margin: auto; text-align: center; color: var(--muted); }
+.ox-fail svg { width: 40px; height: 40px; }
+.ox-print-frame { position: fixed; width: 0; height: 0; border: 0; left: -10px; top: -10px; }
+
+/* pop-ups */
+.ox-pop { position: fixed; z-index: 80; padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); max-width: min(320px, calc(100vw - 16px)); }
+.ox-pop-none { width: 100%; height: 30px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); cursor: pointer; }
+.ox-swatches { display: grid; grid-template-columns: repeat(7, 26px); gap: 5px; }
+.ox-swatch { width: 26px; height: 26px; border-radius: 6px; border: 1px solid rgba(0, 0, 0, .15); cursor: pointer; }
+.ox-swatch:hover { transform: scale(1.1); }
+.ox-pop-custom { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.ox-pop-custom input { width: 40px; height: 26px; padding: 0; border: 0; background: none; }
+.ox-form { display: grid; gap: 10px; min-width: 240px; }
+.ox-form label { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; }
+.ox-form select { height: 32px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 6px; }
+.ox-find { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.ox-find input { height: 32px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 0 10px; background: var(--panel); width: 180px; }
+
+/* comments */
+.ox-side { width: 320px; flex: none; border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; display: flex; flex-direction: column; }
+.ox-side-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.ox-side-head h2 { margin: 0; font-size: 15px; }
+.ox-c-new { padding: 12px; border-bottom: 1px solid var(--line); }
+.ox-c-form textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px; background: var(--panel); resize: vertical; }
+.ox-c-form .row { margin-top: 6px; }
+.ox-c { padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.ox-c.resolved { opacity: .6; }
+.ox-c p { margin: 4px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ox-c-head { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.ox-c-anchor { font-size: 12px; color: var(--muted); border-left: 3px solid var(--accent); padding-left: 8px; margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ox-c-reply { margin: 6px 0 0 12px; padding-left: 10px; border-left: 2px solid var(--line); }
+.ox-c-actions { gap: 12px; }
+.ox-side .pad { padding: 12px; }
+
+/* plain text and Markdown */
+.ox-text-wrap { flex: 1; display: flex; min-height: 0; }
+.ox-text { flex: 1; border: 0; outline: none; resize: none; padding: 24px max(20px, calc((100% - 820px) / 2)); font: 14px/1.6 var(--mono); background: var(--panel); color: var(--text); tab-size: 4; }
+.ox-text-wrap.split .ox-text { padding: 24px; border-right: 1px solid var(--line); }
+.ox-md { flex: 1; overflow-y: auto; padding: 24px 32px; background: var(--panel); line-height: 1.6; }
+.ox-md pre { background: var(--panel-2); padding: 10px; border-radius: 8px; overflow-x: auto; }
+.ox-md table { border-collapse: collapse; } .ox-md td, .ox-md th { border: 1px solid var(--line); padding: 4px 8px; }
+.ox-md blockquote { margin: 0; padding-left: 14px; border-left: 3px solid var(--line-strong); color: var(--muted); }
+
+/* ------------------------------------------------------------------ spreadsheet */
+.ox-sheet { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.ox-fbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.ox-namebox { width: 92px; height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; background: var(--panel); font: 13px var(--mono); }
+.ox-fx { color: var(--muted); font-style: italic; font-weight: 600; padding: 0 2px; }
+.ox-formula { flex: 1; height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; background: var(--panel); font: 13px var(--mono); min-width: 0; }
+.ox-grid { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #fff; color: #000; outline: none; user-select: none; -webkit-user-select: none;
+  font: 14.67px/1.2 Calibri, Carlito, "Segoe UI", Arial, sans-serif; }
+.ox-scroll { position: absolute; right: 0; bottom: 0; overflow: auto; overscroll-behavior: contain; }
+.ox-space { position: relative; pointer-events: none; }
+.ox-layer { position: absolute; left: 0; top: 0; }
+.ox-scroll > .ox-layer { width: 0; height: 0; }
+.ox-pane { position: absolute; overflow: hidden; background: #fff; z-index: 2; border-color: #9aa3b2; border-style: solid; border-width: 0; }
+.ox-grid > .ox-pane:nth-child(2) { border-bottom-width: 2px; }
+.ox-grid > .ox-pane:nth-child(3) { border-right-width: 2px; }
+.ox-grid > .ox-pane:nth-child(4) { border-right-width: 2px; border-bottom-width: 2px; }
+.ox-cell { position: absolute; display: flex; align-items: flex-end; padding: 1px 4px 2px; white-space: pre; overflow: hidden; text-overflow: clip;
+  background-clip: padding-box; }
+.ox-cell.spill { z-index: 1; }
+.ox-cell.wrap { white-space: pre-wrap; overflow-wrap: anywhere; align-items: flex-start; }
+.ox-cell.err { color: #c00000; }
+.ox-cnote { position: absolute; top: 0; right: 0; border: 4px solid transparent; border-top-color: #f59e0b; border-right-color: #f59e0b; }
+.ox-hdr { position: absolute; overflow: hidden; background: #f3f4f6; color: #4b5563; font: 12px var(--font); z-index: 3; }
+.ox-colhdr { top: 0; left: 46px; right: 0; height: 24px; border-bottom: 1px solid #cfd4dc; }
+.ox-rowhdr { top: 24px; left: 0; width: 46px; bottom: 0; border-right: 1px solid #cfd4dc; }
+.ox-hc, .ox-hr { position: absolute; display: grid; place-items: center; cursor: default; }
+.ox-hc { top: 0; height: 24px; border-right: 1px solid #d9dde3; }
+.ox-hr { left: 0; width: 46px; border-bottom: 1px solid #d9dde3; }
+.ox-hc.on, .ox-hr.on { background: #dbe5f8; color: #1d4ed8; font-weight: 700; }
+.ox-hc .ox-resize { position: absolute; top: 0; right: -3px; width: 7px; height: 100%; cursor: col-resize; z-index: 1; }
+.ox-hr .ox-resize { position: absolute; left: 0; bottom: -3px; height: 7px; width: 100%; cursor: row-resize; z-index: 1; }
+.ox-hdr-all { position: absolute; left: 0; top: 0; width: 46px; height: 24px; border: 0; border-right: 1px solid #cfd4dc; border-bottom: 1px solid #cfd4dc; background: #e9ebef; z-index: 4; cursor: pointer; }
+.ox-sel { position: absolute; background: rgba(37, 99, 235, .1); border: 1px solid rgba(37, 99, 235, .6); pointer-events: none; z-index: 3; }
+.ox-active { position: absolute; border: 2px solid #2563eb; pointer-events: none; z-index: 4; margin: -1px 0 0 -1px; box-sizing: content-box; }
+.ox-fill { position: absolute; z-index: 5; background: #2563eb; border: 1px solid #fff; cursor: crosshair; touch-action: none; }
+.ox-gl { position: absolute; background: #e3e6ea; pointer-events: none; }
+.ox-gl.v { width: 1px; } .ox-gl.h { height: 1px; }
+.ox-fillto { position: absolute; border: 1px dashed #2563eb; pointer-events: none; z-index: 4; }
+.ox-cutbox { position: absolute; border: 2px dashed #2563eb; pointer-events: none; z-index: 4; }
+.ox-other { position: absolute; border: 2px solid; pointer-events: none; z-index: 3; }
+.ox-who { position: absolute; top: -17px; left: -2px; padding: 0 5px; font: 600 11px/16px var(--font); color: #fff; white-space: nowrap; border-radius: 3px 3px 3px 0; }
+.ox-guide { position: absolute; background: #2563eb; z-index: 9; pointer-events: none; }
+.ox-guide.v { top: 0; bottom: 0; width: 1px; }
+.ox-guide.h { left: 0; right: 0; height: 1px; }
+.ox-cellinput { position: absolute; z-index: 6; opacity: 0; pointer-events: none; padding: 1px 4px; border: 2px solid #2563eb; outline: none; resize: none; overflow: hidden; background: #fff; color: #000;
+  font: inherit; white-space: pre; box-shadow: 0 2px 8px rgba(0, 0, 0, .15); margin: -1px 0 0 -1px; }
+.ox-cellinput.on { opacity: 1; pointer-events: auto; }
+.ox-suggest { position: absolute; z-index: 7; background: #fff; color: #000; border: 1px solid #cfd4dc; border-radius: 6px; box-shadow: var(--shadow); font: 13px var(--mono); min-width: 140px; }
+.ox-sug { padding: 4px 10px; cursor: pointer; }
+.ox-sug.on, .ox-sug:hover { background: #e8efff; }
+.ox-filterbtn { position: absolute; z-index: 5; width: 18px; height: 18px; padding: 0; border: 1px solid #cfd4dc; border-radius: 3px; background: #fff; color: #4b5563; display: grid; place-items: center; cursor: pointer; }
+.ox-filterbtn svg { width: 12px; height: 12px; }
+.ox-filterbtn.on { background: #2563eb; color: #fff; border-color: #2563eb; }
+.ox-flist { max-height: 240px; overflow-y: auto; margin: 6px 0; display: grid; gap: 2px; min-width: 200px; }
+.ox-fitem { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.ox-foot { display: flex; align-items: center; gap: 6px; padding: 2px 8px; padding-bottom: max(2px, env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); min-height: 38px; }
+.ox-tabs { display: flex; gap: 2px; overflow-x: auto; flex: 1; scrollbar-width: none; }
+.ox-tab { height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); white-space: nowrap; cursor: pointer; font-weight: 550; }
+.ox-tab:hover { background: var(--panel-2); }
+.ox-tab.on { background: var(--accent-soft); color: var(--accent); }
+.ox-stats { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
+.ox-readonly .ox-formula { background: var(--panel-2); }
+
+/* ------------------------------------------------------------------ document */
+.ox-docwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.ox-paper { flex: 1; overflow: auto; padding: 24px 16px 60px; background: var(--bg); }
+.ox-page { --page-w: 794px; position: relative; width: var(--page-w); max-width: 100%; min-height: var(--page-h, 1123px); margin: 0 auto; background: #fff; color: #000;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .12), 0 6px 24px rgba(0, 0, 0, .08); padding: var(--m-t, 94px) var(--m-r, 94px) var(--m-b, 94px) var(--m-l, 94px);
+  font: 11pt/1.4 Calibri, Carlito, "Segoe UI", Arial, sans-serif; }
+.ox-doc { outline: none; min-height: 200px; white-space: pre-wrap; overflow-wrap: break-word; caret-color: #000; counter-reset: n0 n1 n2 n3; }
+.ox-doc > *, .ox-cellbody > * { margin: 0 0 8pt; }
+.ox-doc p, .ox-cellbody p { margin-top: 0; }
+.ox-doc h1, .ox-doc h2, .ox-doc h3, .ox-doc h4 { margin: 12pt 0 4pt; line-height: 1.2; }
+.ox-doc h1 { font-size: 18pt; } .ox-doc h2 { font-size: 15pt; } .ox-doc h3 { font-size: 13pt; } .ox-doc h4 { font-size: 11pt; font-style: italic; }
+.ox-doc h1[data-style="title"] { font-size: 28pt; font-weight: 400; margin-top: 0; }
+.ox-doc blockquote { margin-left: 36pt; margin-right: 36pt; font-style: italic; color: #404040; }
+.ox-doc pre { font: 10pt/1.4 Consolas, "Courier New", monospace; white-space: pre-wrap; margin-bottom: 0; }
+.ox-doc [data-indent="1"] { margin-left: 36pt; } .ox-doc [data-indent="2"] { margin-left: 72pt; } .ox-doc [data-indent="3"] { margin-left: 108pt; }
+.ox-doc [data-indent="4"] { margin-left: 144pt; } .ox-doc [data-indent="5"] { margin-left: 180pt; } .ox-doc [data-indent="6"] { margin-left: 216pt; }
+.ox-doc [data-list] { position: relative; padding-left: 22pt; margin-bottom: 3pt; }
+.ox-doc [data-list][data-level="1"] { margin-left: 22pt; } .ox-doc [data-list][data-level="2"] { margin-left: 44pt; } .ox-doc [data-list][data-level="3"] { margin-left: 66pt; }
+.ox-doc [data-list="bullet"]::before { content: "•"; position: absolute; left: 6pt; }
+.ox-doc [data-list="bullet"][data-level="1"]::before { content: "◦"; } .ox-doc [data-list="bullet"][data-level="2"]::before { content: "▪"; }
+.ox-doc > :not([data-list="number"]) { counter-reset: n0 n1 n2 n3; }
+.ox-doc [data-list="number"][data-level="0"] { counter-increment: n0; counter-reset: n1 n2 n3; }
+.ox-doc [data-list="number"][data-level="1"] { counter-increment: n1; counter-reset: n2 n3; }
+.ox-doc [data-list="number"][data-level="2"] { counter-increment: n2; counter-reset: n3; }
+.ox-doc [data-list="number"][data-level="3"] { counter-increment: n3; }
+.ox-doc [data-list="number"]::before { position: absolute; left: 0; content: counter(n0) "."; }
+.ox-doc [data-list="number"][data-level="1"]::before { content: counter(n1, lower-alpha) "."; }
+.ox-doc [data-list="number"][data-level="2"]::before { content: counter(n2, lower-roman) "."; }
+.ox-doc [data-list="number"][data-level="3"]::before { content: counter(n3) "."; }
+.ox-doc a.ox-link { color: #0563c1; text-decoration: underline; }
+.ox-doc [data-commented] { background: linear-gradient(to right, rgba(245, 158, 11, .18), transparent 60%); box-shadow: -6px 0 0 #f59e0b; }
+.ox-doc .ox-flash { animation: oxflash 1.5s; }
+@keyframes oxflash { 0%, 60% { background: rgba(37, 99, 235, .18); } }
+.ox-pb { position: relative; height: 22px; margin: 10pt 0; border-top: 1px dashed #9aa3b2; text-align: center; user-select: none; }
+.ox-pb span { position: relative; top: -10px; padding: 0 8px; background: #fff; color: #6b7280; font: 11px var(--font); }
+.ox-hrule hr { border: 0; border-top: 1px solid #000; margin: 6pt 0; }
+.ox-fig { position: relative; line-height: 0; user-select: none; }
+.ox-fig.center { text-align: center; } .ox-fig.right { text-align: right; }
+.ox-fig img { max-width: 100%; height: auto; display: inline-block; }
+.ox-fig.on img { outline: 2px solid #2563eb; outline-offset: 2px; }
+.ox-fig-handle { display: none; position: absolute; width: 12px; height: 12px; background: #2563eb; border: 2px solid #fff; border-radius: 2px; cursor: nwse-resize; bottom: -4px; right: -4px; }
+.ox-fig.on .ox-fig-handle { display: block; }
+.ox-fig.center .ox-fig-handle, .ox-fig.right .ox-fig-handle { right: auto; }
+.ox-figbar { position: absolute; top: -44px; left: 0; display: flex; gap: 2px; align-items: center; padding: 4px; line-height: normal; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); z-index: 5; }
+.ox-tbl { margin: 0 0 8pt; overflow-x: auto; }
+.ox-tbl table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.ox-tbl td { border: 1px solid #000; padding: 3pt 5pt; vertical-align: top; }
+.ox-cellbody { outline: none; min-height: 1.4em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ox-cellbody > *:last-child { margin-bottom: 0; }
+.ox-tgrid { display: grid; grid-template-columns: repeat(8, 20px); gap: 3px; margin-top: 6px; }
+.ox-tcell { width: 20px; height: 20px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--panel); cursor: pointer; padding: 0; }
+.ox-tcell.on { background: var(--accent-soft); border-color: var(--accent); }
+.ox-hf { min-height: 18px; color: #555; font-size: 9pt; outline: none; white-space: pre-wrap; border-radius: 4px; }
+.ox-hf > * { margin: 0; }
+.ox-header { position: absolute; left: var(--m-l, 94px); right: var(--m-r, 94px); top: 28px; }
+.ox-footer { position: absolute; left: var(--m-l, 94px); right: var(--m-r, 94px); bottom: 28px; }
+.ox-hf:empty::before { content: attr(data-placeholder); color: transparent; }
+.ox-page:hover .ox-hf:empty::before, .ox-hf:focus:empty::before { color: #b8bec8; }
+.ox-hf:hover, .ox-hf:focus { box-shadow: 0 0 0 1px #d6dbe3; }
+.ox-readonly .ox-hf:empty { display: none; }
+.ox-pagemarks { position: absolute; inset: 0; pointer-events: none; }
+.ox-pagemark { position: absolute; left: 0; right: 0; border-top: 1px dashed #c3c9d3; }
+.ox-pagemark span { position: absolute; right: 6px; top: -9px; padding: 0 6px; background: #fff; color: #9aa3b2; font: 10.5px var(--font); }
+.ox-cursors { position: absolute; inset: 0; pointer-events: none; }
+.ox-rcaret { position: absolute; width: 0; border-left: 2px solid; }
+.ox-rname { position: absolute; left: -2px; top: -16px; padding: 0 5px; font: 600 10.5px/15px var(--font); color: #fff; white-space: nowrap; border-radius: 3px 3px 3px 0; }
+.ox-rsel { position: absolute; opacity: .18; }
+.ox-foot.doc { justify-content: flex-end; color: var(--muted); font-size: 12.5px; }
+
+/* phones: the toolbar scrolls; the page fits the screen (with its margins scaled down), formatting all kept */
+@media (max-width: 860px) {
+  .ox-name { max-width: 34vw; }
+  .ox-side { position: absolute; right: 0; top: 0; bottom: 0; width: min(360px, 100%); z-index: 10; box-shadow: var(--shadow); }
+  .ox-main { position: relative; }
+  .ox-paper { padding: 8px 0 40px; }
+  .ox-page { width: 100%; min-height: 70vh; padding: 28px 18px 40px; box-shadow: none; }
+  .ox-header, .ox-footer { left: 18px; right: 18px; }
+  .ox-header { top: 6px; } .ox-footer { bottom: 8px; }
+  .ox-text { padding: 16px; }
+  .ox-text-wrap.split { flex-direction: column; }
+  .ox-text-wrap.split .ox-text { border-right: 0; border-bottom: 1px solid var(--line); }
+  .ox-people .ox-avatar:nth-child(n+3) { display: none; }
+  .ox-figbar { top: auto; bottom: -46px; }
+}
+@media print { body.ox-open > *:not(.ox-print-frame) { display: none !important; } }

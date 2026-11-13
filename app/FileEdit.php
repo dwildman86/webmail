@@ -76,10 +76,14 @@ final class FileEdit
         $canEdit = in_array($node['role'], ['owner', 'editor'], true) && $files->allowed();
         $s = $this->state($nodeId, $node['version_id'] ? (int) $node['version_id'] : null);
         $this->touch($nodeId, $client, $user, $canEdit, null, true);
+        $ops = $this->opsAfter($nodeId, (int) $s['generation'], (int) $s['seq']);
+        // Saved changes that unsaved ones were made against (seconds old, usually): the browser merges with them in mind.
+        $from = $ops ? min(array_column($ops, 'seen')) : (int) $s['seq'];
+        $context = $from < (int) $s['seq'] ? array_values(array_filter($this->opsAfter($nodeId, (int) $s['generation'], $from), fn ($o) => $o['seq'] <= (int) $s['seq'])) : [];
         return [
             'file' => ['id' => $nodeId, 'name' => $name, 'kind' => self::kind($name), 'size' => (int) $node['size'], 'role' => $node['role']],
             'can_edit' => $canEdit, 'generation' => (int) $s['generation'], 'version_id' => $s['version_id'] ? (int) $s['version_id'] : null,
-            'base_seq' => (int) $s['seq'], 'ops' => $this->opsAfter($nodeId, (int) $s['generation'], (int) $s['seq']),
+            'base_seq' => (int) $s['seq'], 'ops' => $ops, 'context' => $context,
             'me' => ['client' => $client, 'user_id' => (int) $user['id'], 'name' => $user['name'] ?: $user['email'], 'color' => self::color((int) $user['id'])],
         ] + $this->room($nodeId, $client);
     }

@@ -3,6 +3,16 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.22.0
+- **Edit documents and spreadsheets in Files**: Word (.docx), Excel (.xlsx), CSV, text and Markdown files open in an editor in the webmail. They stay real Office files, so they open in Word, Excel, LibreOffice or Google Docs as before. Nothing is installed or sent anywhere else.
+- **Edit together, live**: everyone with edit access can work on a file at once. Changes appear for the others within about a second, with each person's cursor or selected cells in their colour and name. Typing in the same paragraph keeps both people's words. Changes save as you go (one browser saves for everyone), each editing session is one version in the file's history, and changes made while the connection drops are kept on the device and sent when it's back.
+- **Documents**: headings, title, quotes, fonts, sizes, bold, italic, underline, strikethrough, superscript, colours and highlighting, links, bulleted and numbered lists with levels, alignment and indents, tables (rows, columns, shading, a header row), pictures (resize, align, alt text), page breaks, lines, headers and footers, A4 or Letter, portrait or landscape, margins, find and replace, word count, and printing or saving as PDF.
+- **Spreadsheets**: about 160 Excel functions (SUM, IF, VLOOKUP, XLOOKUP, SUMIFS, INDEX/MATCH, dates, text, finance and more), recalculated as you type, and formulas that follow when rows and columns are inserted or deleted. Also: number formats (currency, percentages, dates, custom), fonts, colours, borders, merged cells, wrapping, alignment, several sheets, frozen rows and columns, sorting, filters, AutoSum, the fill handle (series and formulas), copy and paste with Excel and Google Sheets, resizing, find and replace, and printing.
+- **Comments** on a paragraph, a cell or the whole file, with replies and resolving. People who can only view a file can comment too.
+- **Files → New**: a document, spreadsheet or text file, blank or from a template (letter, meeting notes, report, CV, budget, invoice, timesheet, to-do list).
+- Files with things the editor can't keep yet, such as tracked changes, macros, charts or pivot tables, open to view. You can edit a copy, or edit anyway once you've been told what would be lost; earlier versions stay in the history.
+- Works on phones: the toolbar scrolls, and documents fit the screen with all their formatting.
+
 ## 1.21.0
 - **Files**: documents and folders in the webmail, like OneDrive. Upload by dragging in, in pieces, so hosting upload limits don't matter. Make folders, rename, move, copy, search, download a folder as a ZIP, open images, PDFs, text, audio and video in the page, keep earlier versions, and get things back from the Bin for 30 days. Needs an active GhostParse plan; without one, what's stored can still be opened, downloaded and deleted.
 - **Sharing** with a person, or with everyone who reads a mailbox, to view or to edit. A folder's sharing covers everything inside it.
