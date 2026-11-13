@@ -3,6 +3,23 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.22.1
+Security fixes from an audit. Update soon.
+- **Copying from this hosting account's mailboxes**: only administrators can copy any of them. Others can only copy the old mailbox with the same address as a mailbox they read here. Before, anyone signed in could copy a colleague's old email.
+- **Notifications** only go to the browsers' own push services (Google, Mozilla, Microsoft and Apple), never to other addresses. Turning them off on one device can't affect anyone else's.
+- **Writing together**: a colleague's part of a shared reply is cleaned to plain formatting before it's shown.
+- **Documents**: links only go to web, email and phone addresses, whether they came from a file, from pasting or from someone editing with you.
+- **Administrators** confirm their password (or passkey) to make someone an administrator, set someone's password or reset their two-step verification.
+- Smaller fixes:
+  - A save from the editor can't skip changes made by others.
+  - Two copies of one incoming email arriving at once are stored once.
+  - Imports from another mail server connect only to the internet address that was checked.
+  - Signing out needs the page's own token.
+  - Browsers are told to keep to HTTPS.
+  - Spreadsheet colours can't load outside images.
+  - Files that unpack to far more than they say are refused.
+- Addresses from GhostParse without sending and receiving settings count as both, with no PHP warnings.
+
 ## 1.22.0
 - **Edit documents and spreadsheets in Files**: Word (.docx), Excel (.xlsx), CSV, text and Markdown files open in an editor in the webmail. They stay real Office files, so they open in Word, Excel, LibreOffice or Google Docs as before. Nothing is installed or sent anywhere else.
 - **Edit together, live**: everyone with edit access can work on a file at once. Changes appear for the others within about a second, with each person's cursor or selected cells in their colour and name. Typing in the same paragraph keeps both people's words. Changes save as you go (one browser saves for everyone), each editing session is one version in the file's history, and changes made while the connection drops are kept on the device and sent when it's back.
