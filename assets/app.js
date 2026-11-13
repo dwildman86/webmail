@@ -2849,7 +2849,7 @@ const SETTINGS = {
         e.target.disabled = true;
         try { await api("admin/mailboxes", { method: "POST", body: { address: a.address } }); toast(`${a.address} delivers here now.`); await refreshCounts(); renderShell(); loadList(); openSettings("admin-mailboxes"); } catch (err) { toast(err.message); e.target.disabled = false; }
       } }, a.connected ? "Connect again" : "Connect"))));
-    return h("div", {}, h("section", {}, h("h3", {}, "Your GhostParse addresses"),
+    return h("div", {}, domains.length ? receivingSection(domains) : null, h("section", {}, h("h3", {}, "Your GhostParse addresses"),
       h("p", { class: "muted" }, "Connecting an address makes it a mailbox here: it can send and receive, and its webhook is pointed at this webmail. You get access to it; give other users access under Users."),
       addresses.length ? h("table", { class: "list" }, h("tr", {}, h("th", {}, "Address"), h("th", {}, ""), h("th", {}, "")), rows)
         : h("p", {}, domains.length ? "No addresses yet: add one below." : "No addresses yet: add a domain in GhostParse under Domains first.")),
@@ -2955,6 +2955,46 @@ document.addEventListener("keydown", (e) => {
 // New mail: check every 30 seconds while the page is open and visible.
 setInterval(() => { if ($shell && document.visibilityState === "visible" && !document.querySelector(".overlay:not([hidden])")) refresh(); }, 30000);
 document.addEventListener("visibilitychange", () => { if ($shell && document.visibilityState === "visible") refresh(); });
+
+/** The last DNS check per domain, so its answer stays on screen when the page is drawn again. */
+const lastMxCheck = {};
+/**
+ * Whether each domain can receive: receiving switched on at GhostParse, and its MX record sending email there first.
+ * Turns receiving on from here, shows the MX record to add, and checks the DNS again on request.
+ */
+function receivingSection(domains) {
+  const again = () => openSettings("admin-mailboxes");
+  const mxTable = (d) => d.mx && h("table", { class: "list dns-record" },
+    h("tr", {}, h("th", {}, "Type"), h("th", {}, "Host"), h("th", {}, "Priority"), h("th", {}, "Points to")),
+    h("tr", {}, h("td", {}, "MX"), h("td", { class: "mono" }, d.mx.host), h("td", {}, String(d.mx.priority)), h("td", { class: "mono" }, d.mx.value)));
+  const checked = (d) => {
+    const mx = lastMxCheck[d.id];
+    return mx && !mx.ok && h("div", { class: "notice warn small mx-check" }, h("strong", {}, "Checked just now: "), mx.error || "The MX record isn't there yet.",
+      mx.found?.length ? h("div", {}, "Found: ", h("span", { class: "mono" }, mx.found.join(", "))) : null,
+      h("div", { class: "muted" }, "DNS changes can take a few minutes to an hour to show."));
+  };
+  const button = (d, label, path, done, primary = true) => h("button", { class: primary ? "btn btn-primary btn-sm" : "btn btn-sm", onclick: async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await api(path, { method: "POST", body: { domain_id: d.id } });
+      lastMxCheck[d.id] = r.mx;
+      if (r.domain?.ready) toast(`${d.name} receives email here now.`); else if (done) toast(done);
+      again();
+    } catch (err) { toast(err.message); e.target.disabled = false; }
+  } }, label);
+  const card = (d) => {
+    if (d.ready) return h("div", { class: "notice ok receiving" }, icon("check"), ` ${d.name} receives email here.`);
+    if (!d.receiving) return h("div", { class: "notice warn receiving" },
+      h("p", {}, h("strong", {}, `Receiving is off for ${d.name}`), ` at GhostParse, so email to its addresses is turned away${d.mailboxes ? ", including the mailboxes here" : ""}.`),
+      h("div", { class: "row" }, button(d, "Turn on receiving", "admin/domains/receiving", `Receiving is on for ${d.name}.`)));
+    if (!d.mx_ok) return h("div", { class: "notice warn receiving" },
+      h("p", {}, h("strong", {}, `${d.name}'s email doesn't come to GhostParse yet.`), " Add this record where its DNS is managed:"), mxTable(d),
+      h("p", { class: "small" }, `Then remove ${d.name}'s other MX records. Email goes to the lowest priority number first, so with another server ahead of GhostParse it never arrives here. To keep email for ${d.name} where it is now, receive here on a subdomain instead (such as inbound.${d.name}).`),
+      checked(d), h("div", { class: "row" }, button(d, "Check again", "admin/domains/verify", null, false)));
+    return h("div", { class: "notice receiving" }, `${d.name} is ready to receive: connect one of its addresses below.`);
+  };
+  return h("section", {}, h("h3", {}, "Receiving email"), ...domains.map(card));
+}
 
 window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo,
   openCalendar: (opts = {}) => {

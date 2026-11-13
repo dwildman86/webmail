@@ -837,3 +837,12 @@ table.list .pill { white-space: nowrap; }
   body:has(.shell.reading) .app-prompt { bottom: calc(16px + env(safe-area-inset-bottom)); }
 }
 @media (prefers-reduced-motion: reduce) { .app-prompt { transition: none; } }
+
+/* Settings → Connect addresses: whether each domain receives. */
+.notice.receiving { margin-bottom: 10px; }
+.notice.receiving p { margin: 0 0 8px; }
+.notice.receiving svg { width: 15px; height: 15px; vertical-align: -2px; }
+.notice.receiving .row { margin-top: 8px; }
+.dns-record { margin: 8px 0; background: var(--panel); border-radius: var(--radius-sm); color: var(--text); }
+.dns-record td, .dns-record th { padding: 6px 10px; text-align: left; word-break: break-all; }
+.mx-check { margin: 8px 0 0; }

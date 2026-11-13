@@ -3,6 +3,11 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.18.0
+- **Receiving, switched on for you**: connecting an address as a mailbox now also turns on receiving for its domain at GhostParse. Without it, GhostParse turns away email to the domain, even with the address's webhook set. Mailboxes connected before this update are checked once after it, and their domains turned on. If you turn receiving off again in GhostParse later, the webmail leaves it off.
+- **Settings → Connect addresses → Receiving email** shows whether each domain receives here. Turn receiving on with one click, see the MX record to add, and press **Check again** after changing DNS. You'll see what GhostParse found, such as another mail server listed ahead of it, which means email never arrives here.
+- Settings → Status says which of the two is missing for each mailbox.
+
 ## 1.17.0
 - **Install the app, turn on notifications**: a few seconds after the inbox opens, a small card in the corner suggests what this device hasn't set up yet. On a computer, notifications for new email come first, then installing the webmail in its own window (Chrome and Edge). On a phone, the app comes first: Install on Android, and on iPhone and iPad, the steps to add it to the Home Screen, which iOS needs before it allows notifications.
 - Only one card at a time, never over an open email you're writing, and nothing at all where notifications are blocked. **Not now** waits 3 days, then 2 weeks, then a month, and after that it stops asking on that device.

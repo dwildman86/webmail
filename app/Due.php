@@ -53,7 +53,15 @@ final class Due
                 [$now, gmdate('Y-m-d H:i:s', time() - 600)])
             || (new Calendar($this->app))->remindersDue()
             || (bool) $this->app->db->value('SELECT 1 FROM {messages} WHERE parties_indexed = 0 LIMIT 1')
-            || (bool) $this->app->db->value('SELECT 1 FROM {waf_rate} WHERE minute < ? LIMIT 1', [intdiv(time(), 60) - 60]);
+            || (bool) $this->app->db->value('SELECT 1 FROM {waf_rate} WHERE minute < ? LIMIT 1', [intdiv(time(), 60) - 60])
+            || $this->receivingUnchecked();
+    }
+
+    /** Once, after updating to 1.18.0: mailboxes here, and their domains not yet checked for receiving switched off. */
+    private function receivingUnchecked(): bool
+    {
+        return !$this->app->db->value("SELECT 1 FROM {meta} WHERE k = 'receiving_checked'")
+            && (bool) $this->app->db->value('SELECT 1 FROM {mailboxes} LIMIT 1');
     }
 
     /** Do what's due. Returns ['woken' => n, 'sent' => n], or null when another request is doing it. */
@@ -81,6 +89,16 @@ final class Due
             // Email from before 1.14.0: who it's from and to, for the customer panel (a batch at a time).
             (new Mailstore($this->app))->indexOldParties(300);
             (new Waf($this->app))->cleanup();
+            if ($this->receivingUnchecked()) {
+                // Marked done first: GhostParse being unreachable now isn't worth asking it on every request after.
+                // An administrator's Connect addresses page checks again.
+                $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('receiving_checked', ?)", [App::now()]);
+                try {
+                    (new Admin($this->app))->ensureReceiving();
+                } catch (\Throwable $e) {
+                    error_log('webmail: checking domains receive failed: ' . $e->getMessage());
+                }
+            }
             return ['woken' => count($woken), 'sent' => $sent, 'reminded' => $reminded];
         } finally {
             $this->app->db->value('SELECT RELEASE_LOCK(?)', [$lock]);

@@ -73,7 +73,7 @@ final class InboundTest extends TestCase
     public function testConnectingAGhostParseAddressPointsItsWebhookHere(): void
     {
         $this->answers['GET /v1/domains'] = fn () => [200, ['domains' => [[
-            'id' => 'dom_1', 'name' => 'acme.test', 'inbound_ready' => true, 'sending_ready' => true,
+            'id' => 'dom_1', 'name' => 'acme.test', 'inbound_ready' => true, 'inbound_enabled' => true, 'sending_ready' => true,
             'addresses' => [
                 ['id' => 'adr_1', 'address' => 'support@acme.test', 'is_pattern' => false, 'can_send' => false, 'can_receive' => true, 'webhook_url' => null],
                 ['id' => 'adr_2', 'address' => 'ticket-*@acme.test', 'is_pattern' => true, 'can_send' => false, 'can_receive' => true],

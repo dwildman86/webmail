@@ -88,6 +88,12 @@ final class GhostParse
         return $this->request('PATCH', '/v1/domains/' . rawurlencode($domainId), $fields);
     }
 
+    /** POST /v1/domains/{id}/verify: GhostParse looks up the domain's DNS now. Returns ['domain' => …, 'checks' => …]. */
+    public function verifyDomain(string $domainId): array
+    {
+        return $this->request('POST', '/v1/domains/' . rawurlencode($domainId) . '/verify');
+    }
+
     /** POST /v1/domains/{id}/addresses: a new address on one of the account's domains. Returns it. */
     public function addAddress(string $domainId, array $fields): array
     {

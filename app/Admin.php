@@ -41,8 +41,16 @@ final class Admin
                 Http::json(['mailboxes' => $store->allMailboxes()]);
             case 'GET admin/addresses':
                 $domains = $this->app->gp->domains();
-                Http::json(['addresses' => $this->ghostparseAddresses($domains),
-                    'domains' => array_map(fn ($d) => ['id' => $d['id'], 'name' => $d['name'], 'ready' => (bool) ($d['inbound_ready'] ?? false)], $domains)]);
+                // A domain with mailboxes here but receiving off at GhostParse (set up before 1.18.0): turned on, once.
+                if ($this->ensureReceiving($domains)) {
+                    $domains = $this->app->gp->domains();
+                }
+                Http::json(['addresses' => $this->ghostparseAddresses($domains), 'domains' => $this->domainSummary($domains)]);
+            // Receiving on at GhostParse for one domain, then its DNS checked straight away.
+            case 'POST admin/domains/receiving':
+                Http::json($this->turnOnReceiving((string) ($in['domain_id'] ?? '')));
+            case 'POST admin/domains/verify':
+                Http::json($this->checkDomain((string) ($in['domain_id'] ?? '')));
             // A new address at GhostParse, made a mailbox here straight away.
             case 'POST admin/addresses':
                 try {
@@ -153,7 +161,8 @@ final class Admin
                 }
                 $out[] = ['domain_id' => $d['id'], 'address_id' => $a['id'], 'address' => $a['address'], 'can_send' => (bool) $a['can_send'],
                     'can_receive' => (bool) $a['can_receive'], 'sending_ready' => (bool) ($d['sending_ready'] ?? false),
-                    'inbound_ready' => (bool) ($d['inbound_ready'] ?? false), 'webhook_url' => $a['webhook_url'] ?? null,
+                    'inbound_ready' => (bool) ($d['inbound_ready'] ?? false), 'inbound_enabled' => (bool) ($d['inbound_enabled'] ?? false),
+                    'webhook_url' => $a['webhook_url'] ?? null,
                     'connected' => (bool) $this->app->db->value('SELECT id FROM {mailboxes} WHERE address_bidx = ?', [$store->addressIndex($a['address'])])];
             }
         }
@@ -182,7 +191,112 @@ final class Admin
         } catch (GhostParseError $e) {
             throw new HttpError(422, "GhostParse didn't accept the change: {$e->getMessage()}", 'ghostparse_error');
         }
+        // A mailbox needs its domain to receive: turned on at GhostParse if it isn't. The address is connected either way.
+        if (!$match['inbound_enabled']) {
+            try {
+                $this->app->gp->updateDomain($match['domain_id'], ['inbound_enabled' => true]);
+                $this->rememberAuto($match['domain_id']);
+            } catch (GhostParseError $e) {
+                error_log("webmail: couldn't turn on receiving for {$address}'s domain: {$e->getMessage()}");
+            }
+        }
         return (new Mailstore($this->app))->createMailbox($address, $displayName);
+    }
+
+    /**
+     * Each domain, and whether it can receive: receiving switched on at GhostParse, and its MX record pointing there
+     * (first in line). `mx` is the record to add, `mailboxes` how many of its addresses are mailboxes here.
+     */
+    public function domainSummary(array $domains): array
+    {
+        $connected = [];
+        foreach ($this->ghostparseAddresses($domains) as $a) {
+            $connected[$a['domain_id']] = ($connected[$a['domain_id']] ?? 0) + ($a['connected'] ? 1 : 0);
+        }
+        return array_map(function ($d) use ($connected) {
+            $mx = null;
+            foreach ($d['records'] ?? [] as $r) {
+                if (($r['kind'] ?? '') === 'mx') {
+                    $mx = $r;
+                }
+            }
+            return ['id' => (string) $d['id'], 'name' => (string) $d['name'], 'ready' => (bool) ($d['inbound_ready'] ?? false),
+                'receiving' => (bool) ($d['inbound_enabled'] ?? false), 'mx_ok' => (bool) ($mx['verified'] ?? false),
+                'mx' => $mx ? ['host' => (string) ($mx['host'] ?? $d['name']), 'value' => (string) ($mx['value'] ?? ''), 'priority' => (int) ($mx['priority'] ?? 10)] : null,
+                'mailboxes' => $connected[$d['id']] ?? 0];
+        }, $domains);
+    }
+
+    /** Receiving on for one of the account's domains, and its DNS checked now so the answer is current. */
+    public function turnOnReceiving(string $domainId): array
+    {
+        $this->domainOf($domainId);
+        try {
+            $this->app->gp->updateDomain($domainId, ['inbound_enabled' => true]);
+        } catch (GhostParseError $e) {
+            throw new HttpError(422, "GhostParse didn't turn receiving on: {$e->getMessage()}", 'ghostparse_error');
+        }
+        return $this->checkDomain($domainId);
+    }
+
+    /** GhostParse looks up the domain's DNS now: the domain as it stands, and what's wrong with its MX record, if anything. */
+    public function checkDomain(string $domainId): array
+    {
+        $this->domainOf($domainId);
+        try {
+            $r = $this->app->gp->verifyDomain($domainId);
+        } catch (GhostParseError $e) {
+            throw new HttpError(422, "GhostParse couldn't check the domain: {$e->getMessage()}", 'ghostparse_error');
+        }
+        $mx = $r['checks']['mx'] ?? null;
+        return ['domain' => $this->domainSummary([$r['domain'] ?? []] )[0] ?? null,
+            'mx' => $mx ? ['ok' => (bool) $mx['ok'], 'found' => $mx['found'] ?? [], 'error' => $mx['error'] ?? null] : null];
+    }
+
+    private function domainOf(string $domainId): array
+    {
+        foreach ($this->app->gp->domains() as $d) {
+            if ((string) $d['id'] === $domainId) {
+                return $d;
+            }
+        }
+        throw new HttpError(404, "That domain isn't on your GhostParse account.", 'unknown_domain');
+    }
+
+    /**
+     * Domains with mailboxes here whose receiving is off at GhostParse are turned on, once each: if someone turns it off
+     * again in GhostParse afterwards, that's their choice and it stays off. Returns the names turned on.
+     */
+    public function ensureReceiving(?array $domains = null): array
+    {
+        $domains ??= $this->app->gp->domains();
+        $done = $this->autoDomains();
+        $turned = [];
+        foreach ($this->domainSummary($domains) as $d) {
+            if ($d['receiving'] || !$d['mailboxes'] || in_array($d['id'], $done, true)) {
+                continue;
+            }
+            try {
+                $this->app->gp->updateDomain($d['id'], ['inbound_enabled' => true]);
+                $turned[] = $d['name'];
+            } catch (GhostParseError $e) {
+                error_log("webmail: couldn't turn on receiving for {$d['name']}: {$e->getMessage()}");
+            }
+            $this->rememberAuto($d['id']);
+        }
+        return $turned;
+    }
+
+    private function autoDomains(): array
+    {
+        $v = json_decode((string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'receiving_auto'"), true);
+        return is_array($v) ? $v : [];
+    }
+
+    private function rememberAuto(string $domainId): void
+    {
+        $ids = array_values(array_unique([...$this->autoDomains(), $domainId]));
+        $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('receiving_auto', ?)", [json_encode($ids)]);
     }
 
     /** What an administrator should know: the GhostParse account, and anything not ready yet. */
@@ -191,6 +305,7 @@ final class Admin
         $problems = [];
         try {
             $me = $this->app->gp->me();
+            $this->ensureReceiving();
         } catch (GhostParseError $e) {
             return ['ok' => false, 'problems' => ["Can't reach GhostParse with the API key: {$e->getMessage()}"]];
         }
@@ -199,7 +314,9 @@ final class Admin
                 continue;
             }
             if (!$a['inbound_ready']) {
-                $problems[] = "{$a['address']}: its domain isn't receiving email yet (check its MX record in GhostParse).";
+                $problems[] = $a['inbound_enabled']
+                    ? "{$a['address']}: its domain isn't receiving email yet: its MX record has to point at GhostParse, first in line (Settings → Connect addresses)."
+                    : "{$a['address']}: receiving is switched off for its domain at GhostParse. Turn it on under Settings → Connect addresses.";
             }
             if (!$a['sending_ready']) {
                 $problems[] = "{$a['address']}: its domain isn't verified for sending yet (check its DNS records in GhostParse).";
