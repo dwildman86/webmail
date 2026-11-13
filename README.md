@@ -134,8 +134,9 @@ Reminders are sent with the rest of the webmail's due work (see the next section
 
 ### Files
 
-**Files** in the side menu: documents and folders like OneDrive, encrypted wherever they're stored. Offered while your
-GhostParse plan is active (without one, what's stored can still be opened, downloaded and deleted).
+**Files** in the side menu: documents and folders like OneDrive, encrypted wherever they're stored. Included on every
+GhostParse plan. (If GhostParse ever says an account can't have it, what's stored can still be opened, downloaded and
+deleted.)
 
 - **Folders and files**: upload by dragging in or with **Upload** (big files go in 8 MB pieces, so hosting upload limits
   don't matter), make folders, rename, move, copy, search, and download a folder as a ZIP. Images, PDFs, text, audio
