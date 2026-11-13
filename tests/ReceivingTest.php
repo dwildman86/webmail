@@ -42,6 +42,14 @@ final class ReceivingTest extends TestCase
         return array_values(array_filter($this->requests, fn ($r) => $r['method'] === 'PATCH' && $r['path'] === '/v1/domains/dom_1'));
     }
 
+    public function testAnAddressWithoutSendingAndReceivingFlagsCountsAsBoth(): void
+    {
+        $this->answers['GET /v1/domains'] = fn () => [200, ['domains' => [['id' => 'dom_1', 'name' => 'mejl.test',
+            'addresses' => [['id' => 'adr_1', 'address' => 'hello@mejl.test'], ['id' => 'adr_2', 'address' => 'news@mejl.test', 'can_send' => true, 'can_receive' => false]]]]]];
+        $list = (new Admin($this->app))->ghostparseAddresses();
+        $this->assertSame([[true, true], [true, false]], array_map(fn ($a) => [$a['can_send'], $a['can_receive']], $list));
+    }
+
     public function testConnectingAnAddressTurnsOnReceivingForItsDomain(): void
     {
         (new Admin($this->app))->connectAddress('nope@mejl.test');

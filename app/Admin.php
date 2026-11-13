@@ -159,8 +159,9 @@ final class Admin
                 if (!empty($a['is_pattern'])) {
                     continue;
                 }
-                $out[] = ['domain_id' => $d['id'], 'address_id' => $a['id'], 'address' => $a['address'], 'can_send' => (bool) $a['can_send'],
-                    'can_receive' => (bool) $a['can_receive'], 'sending_ready' => (bool) ($d['sending_ready'] ?? false),
+                // Both are on unless GhostParse says otherwise (its own default), so an older or shorter answer reads the same.
+                $out[] = ['domain_id' => $d['id'], 'address_id' => $a['id'], 'address' => $a['address'], 'can_send' => (bool) ($a['can_send'] ?? true),
+                    'can_receive' => (bool) ($a['can_receive'] ?? true), 'sending_ready' => (bool) ($d['sending_ready'] ?? false),
                     'inbound_ready' => (bool) ($d['inbound_ready'] ?? false), 'inbound_enabled' => (bool) ($d['inbound_enabled'] ?? false),
                     'webhook_url' => $a['webhook_url'] ?? null,
                     'connected' => (bool) $this->app->db->value('SELECT id FROM {mailboxes} WHERE address_bidx = ?', [$store->addressIndex($a['address'])])];
