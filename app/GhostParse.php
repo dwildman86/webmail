@@ -88,6 +88,12 @@ final class GhostParse
         return $this->request('PATCH', '/v1/domains/' . rawurlencode($domainId), $fields);
     }
 
+    /** The daily check-in: this webmail's version and address, and how many users and mailboxes it has (never who). */
+    public function heartbeat(array $fields): array
+    {
+        return $this->request('POST', '/v1/webmail/heartbeat', $fields);
+    }
+
     /** POST /v1/domains/{id}/verify: GhostParse looks up the domain's DNS now. Returns ['domain' => …, 'checks' => …]. */
     public function verifyDomain(string $domainId): array
     {

@@ -16,6 +16,8 @@ final class ReceivingTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->app->db->run("DELETE FROM {meta} WHERE k IN ('checkin_at', 'receiving_checked')");
+        $this->answers['POST /v1/webmail/heartbeat'] = fn () => [200, ['ok' => true]];
         $this->answers['GET /v1/domains'] = fn () => [200, ['domains' => [$this->domain()]]];
         $this->answers['GET /v1/me'] = fn () => [200, ['account' => ['id' => 'acc_1']]];
         $this->answers['PATCH /v1/domains/dom_1/addresses/adr_1'] = fn () => [200, ['ok' => true]];
@@ -88,5 +90,19 @@ final class ReceivingTest extends TestCase
 
         $this->expectExceptionMessage("isn't on your GhostParse account");
         $admin->turnOnReceiving('dom_other');
+    }
+
+    public function testChecksInWithGhostParseOnceADay(): void
+    {
+        $this->answers['POST /v1/webmail/heartbeat'] = fn () => [200, ['ok' => true]];
+        (new Mailstore($this->app))->createMailbox('nope@mejl.test');
+        $due = new Due($this->app);
+        $due->run();
+        $hb = array_values(array_filter($this->requests, fn ($r) => $r['path'] === '/v1/webmail/heartbeat'));
+        $this->assertSame([['version' => \Webmail\App::VERSION, 'url' => 'https://mail.example.com/webmail', 'users' => 0, 'mailboxes' => 1]], array_column($hb, 'body'));
+        $this->assertContains('User-Agent: ghostparse-webmail/' . \Webmail\App::VERSION, $hb[0]['headers'], 'which GhostParse recognises it by');
+        $this->assertFalse($due->pending(), 'not again today');
+        $this->app->db->run("UPDATE {meta} SET v = ? WHERE k = 'checkin_at'", [gmdate('Y-m-d H:i:s', time() - 90000)]);
+        $this->assertTrue($due->pending(), 'tomorrow');
     }
 }

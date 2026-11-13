@@ -54,7 +54,27 @@ final class Due
             || (new Calendar($this->app))->remindersDue()
             || (bool) $this->app->db->value('SELECT 1 FROM {messages} WHERE parties_indexed = 0 LIMIT 1')
             || (bool) $this->app->db->value('SELECT 1 FROM {waf_rate} WHERE minute < ? LIMIT 1', [intdiv(time(), 60) - 60])
-            || $this->receivingUnchecked();
+            || $this->receivingUnchecked()
+            || $this->checkInDue();
+    }
+
+    /** Once a day, GhostParse is told this webmail's version and address, and how many users and mailboxes it has. */
+    private function checkInDue(): bool
+    {
+        if ($this->app->config->get('checkin', true) === false) {
+            return false;
+        }
+        $last = (string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'checkin_at'");
+        return $last === '' || strtotime($last) < time() - 86400;
+    }
+
+    private function checkIn(): void
+    {
+        // Marked first: GhostParse being unreachable is tried again tomorrow, not on every request.
+        $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('checkin_at', ?)", [App::now()]);
+        $this->app->gp->heartbeat(['version' => App::VERSION, 'url' => $this->app->baseUrl(),
+            'users' => (int) $this->app->db->value('SELECT COUNT(*) FROM {users}'),
+            'mailboxes' => (int) $this->app->db->value('SELECT COUNT(*) FROM {mailboxes}')]);
     }
 
     /** Once, after updating to 1.18.0: mailboxes here, and their domains not yet checked for receiving switched off. */
@@ -89,6 +109,13 @@ final class Due
             // Email from before 1.14.0: who it's from and to, for the customer panel (a batch at a time).
             (new Mailstore($this->app))->indexOldParties(300);
             (new Waf($this->app))->cleanup();
+            if ($this->checkInDue()) {
+                try {
+                    $this->checkIn();
+                } catch (\Throwable $e) {
+                    error_log('webmail: daily check-in with GhostParse failed: ' . $e->getMessage());
+                }
+            }
             if ($this->receivingUnchecked()) {
                 // Marked done first: GhostParse being unreachable now isn't worth asking it on every request after.
                 // An administrator's Connect addresses page checks again.

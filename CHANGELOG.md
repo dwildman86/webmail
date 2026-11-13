@@ -3,6 +3,9 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.19.0
+- **A daily check-in with GhostParse**: once a day, the webmail tells GhostParse its version, its web address, and how many users and mailboxes it has. That's counts only, never who the people are or any email. GhostParse uses it to support installs, to know which versions are in use before releasing an update, and to tell you when email can't reach your mailboxes. To turn it off, add `'checkin' => false` to config.php.
+
 ## 1.18.0
 - **Receiving, switched on for you**: connecting an address as a mailbox now also turns on receiving for its domain at GhostParse. Without it, GhostParse turns away email to the domain, even with the address's webhook set. Mailboxes connected before this update are checked once after it, and their domains turned on. If you turn receiving off again in GhostParse later, the webmail leaves it off.
 - **Settings → Connect addresses → Receiving email** shows whether each domain receives here. Turn receiving on with one click, see the MX record to add, and press **Check again** after changing DNS. You'll see what GhostParse found, such as another mail server listed ahead of it, which means email never arrives here.
