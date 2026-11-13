@@ -113,14 +113,23 @@ final class FileEdit
             $total = 0;
             $now = App::now();
             foreach ($ops as $o) {
-                $json = json_encode($o['op'] ?? null);
-                $total += strlen((string) $json);
-                if (!is_array($o) || !isset($o['op']) || $total > self::MAX_OP_BYTES) {
+                if (!is_array($o) || !isset($o['op'])) {
+                    throw new HttpError(422, 'That change is damaged.', 'bad_op');
+                }
+                $total += strlen((string) json_encode($o['op']));
+                if ($total > self::MAX_OP_BYTES) {
                     throw new HttpError(413, 'That change is too big (an image over a few megabytes?).', 'too_big');
                 }
-                $this->app->db->insert('INSERT INTO {file_edit_ops} (node_id, generation, client, user_id, seen, op_enc, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                    [$nodeId, $generation, $client, $user['id'], max(0, (int) ($o['seen'] ?? 0)), $this->app->crypto->encryptJson($o['op'], 'files.edit'), $now]);
             }
+            // One browser's changes are stored together, in one unbroken run: each is worked out against the ones before it,
+            // so nobody else's may land in between. The state row is the lock.
+            $this->app->db->tx(function () use ($ops, $nodeId, $generation, $client, $user, $now) {
+                $this->app->db->one('SELECT node_id FROM {file_edit_state} WHERE node_id = ? FOR UPDATE', [$nodeId]);
+                foreach ($ops as $o) {
+                    $this->app->db->insert('INSERT INTO {file_edit_ops} (node_id, generation, client, user_id, seen, op_enc, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                        [$nodeId, $generation, $client, $user['id'], max(0, (int) ($o['seen'] ?? 0)), $this->app->crypto->encryptJson($o['op'], 'files.edit'), $now]);
+                }
+            });
             $this->app->db->run('UPDATE {file_nodes} SET updated_at = ? WHERE id = ?', [$now, $nodeId]);
         }
         $this->touch($nodeId, $client, $user, $canEdit, $presence);
