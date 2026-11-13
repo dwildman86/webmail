@@ -42,7 +42,28 @@ final class FilesRoutes
             case 'POST files/empty-trash':
                 Http::json(['deleted' => $files->emptyTrash($user)]);
             case 'POST files/upload/start':
-                Http::json($files->startUpload($user, $nullable('parent_id'), (string) ($in['name'] ?? ''), (int) ($in['size'] ?? -1), $nullable('node_id'), !empty($in['vault'])));
+                Http::json($files->startUpload($user, $nullable('parent_id'), (string) ($in['name'] ?? ''), (int) ($in['size'] ?? -1), $nullable('node_id'), !empty($in['vault']), null,
+                    isset($in['edit']) && is_array($in['edit']) ? $in['edit'] : null));
+            // Editing documents and spreadsheets together (FileEdit). Asked about once a second: the session is let go first.
+            case 'POST files/edit/open':
+                session_write_close();
+                Http::json((new FileEdit($this->app))->open($user, $int('id'), (string) ($in['client'] ?? '')));
+            case 'POST files/edit/sync':
+                session_write_close();
+                Http::json((new FileEdit($this->app))->sync($user, $int('id'), (string) ($in['client'] ?? ''), $int('generation'), $int('since'),
+                    is_array($in['ops'] ?? null) ? $in['ops'] : [], $in['presence'] ?? null));
+            case 'POST files/edit/leave':
+                session_write_close();
+                (new FileEdit($this->app))->leave($user, $int('id'), (string) ($in['client'] ?? ''));
+                Http::json(['ok' => true]);
+            case 'GET files/comments':
+                Http::json(['comments' => (new FileEdit($this->app))->comments($user, $int('id'))]);
+            case 'POST files/comments':
+                Http::json(['comments' => (new FileEdit($this->app))->comment($user, $int('id'), (string) ($in['anchor'] ?? ''), (string) ($in['body'] ?? ''), $nullable('parent_id'))]);
+            case 'POST files/comments/resolve':
+                Http::json(['comments' => (new FileEdit($this->app))->resolve($user, $int('comment_id'), !empty($in['resolved']))]);
+            case 'POST files/comments/delete':
+                Http::json(['comments' => (new FileEdit($this->app))->deleteComment($user, $int('comment_id'))]);
             case 'POST files/upload/piece':
                 // The file's bytes, as the request body (not JSON), in order.
                 Http::json($files->appendUpload($user, (string) ($_GET['u'] ?? ''), (int) ($_GET['offset'] ?? -1),

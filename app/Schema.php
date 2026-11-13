@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['vault_keys', 'file_activity', 'file_links', 'file_shares', 'file_uploads', 'file_versions', 'file_nodes', 'waf_events', 'waf_rate', 'waf_ips', 'message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['file_comments', 'file_edit_presence', 'file_edit_ops', 'file_edit_state', 'vault_keys', 'file_activity', 'file_links', 'file_shares', 'file_uploads', 'file_versions', 'file_nodes', 'waf_events', 'waf_rate', 'waf_ips', 'message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -591,6 +591,56 @@ final class Schema
                     created_at DATETIME NOT NULL,
                     KEY vault_user (user_id),
                     FOREIGN KEY (user_id) REFERENCES {users}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Editing documents and spreadsheets in Files, together: the changes in order (encrypted), what the stored
+            // version already includes, who has a file open, and comments.
+            14 => [
+                "CREATE TABLE IF NOT EXISTS {file_edit_state} (
+                    node_id INT UNSIGNED PRIMARY KEY,
+                    generation INT UNSIGNED NOT NULL DEFAULT 1,
+                    version_id INT UNSIGNED NULL,
+                    seq BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    autosave_version_id INT UNSIGNED NULL,
+                    updated_at DATETIME NOT NULL,
+                    FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_edit_ops} (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    node_id INT UNSIGNED NOT NULL,
+                    generation INT UNSIGNED NOT NULL,
+                    client CHAR(16) NOT NULL,
+                    user_id INT UNSIGNED NULL,
+                    seen BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                    op_enc MEDIUMTEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    KEY edit_ops_node (node_id, id),
+                    FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_edit_presence} (
+                    node_id INT UNSIGNED NOT NULL,
+                    client CHAR(16) NOT NULL,
+                    user_id INT UNSIGNED NOT NULL,
+                    can_edit TINYINT(1) NOT NULL DEFAULT 0,
+                    state_enc TEXT NULL,
+                    joined_at DATETIME NOT NULL,
+                    seen_at DATETIME NOT NULL,
+                    PRIMARY KEY (node_id, client),
+                    KEY presence_seen (seen_at),
+                    FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {file_comments} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    node_id INT UNSIGNED NOT NULL,
+                    parent_id INT UNSIGNED NULL,
+                    anchor VARCHAR(200) NOT NULL DEFAULT '',
+                    body_enc TEXT NOT NULL,
+                    user_id INT UNSIGNED NULL,
+                    created_at DATETIME NOT NULL,
+                    resolved_at DATETIME NULL,
+                    resolved_by INT UNSIGNED NULL,
+                    KEY comment_node (node_id),
+                    FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

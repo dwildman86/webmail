@@ -579,7 +579,7 @@ final class Files
         $this->app->db->run('DELETE FROM {file_nodes} WHERE id = ?', [$id]);
     }
 
-    private function deleteObject(string $store, string $key): void
+    public function deleteObject(string $store, string $key): void
     {
         try {
             $this->store($store)->delete($key);
@@ -600,7 +600,8 @@ final class Files
      * Start an upload into a folder (null: the top level, or the vault's), or as a new version of a file ($nodeId).
      * The file then arrives in pieces (appendUpload). $link: a file request's share link (someone outside uploading).
      */
-    public function startUpload(?array $user, ?int $parentId, string $name, int $size, ?int $nodeId = null, bool $vault = false, ?array $link = null): array
+    /** $edit: saved from the editor, ['seq' => the last change it includes, 'generation' => …] (FileEdit). */
+    public function startUpload(?array $user, ?int $parentId, string $name, int $size, ?int $nodeId = null, bool $vault = false, ?array $link = null, ?array $edit = null): array
     {
         $this->needPlan();
         $s = $this->settings();
@@ -632,7 +633,7 @@ final class Files
         $token = bin2hex(random_bytes(16));
         $this->app->db->insert('INSERT INTO {file_uploads} (token, user_id, link_id, parent_id, node_id, name_enc, size, store, object_key, key_enc, state, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [$token, $user['id'] ?? null, $link['id'] ?? null, $parentId ?? 0, $nodeId, $this->c()->encrypt($name, 'files.name'),
-            $size, $store->name(), $object, FileCrypto::wrap($this->c(), $key), json_encode(['owner' => $ownerId, 'vault' => $vault, 's' => $state]), App::now()]);
+            $size, $store->name(), $object, FileCrypto::wrap($this->c(), $key), json_encode(['owner' => $ownerId, 'vault' => $vault, 's' => $state, 'edit' => $edit && $nodeId ? ['seq' => (int) ($edit['seq'] ?? 0), 'generation' => (int) ($edit['generation'] ?? 0)] : null]), App::now()]);
         $result = ['upload' => $token, 'piece' => self::UPLOAD_PIECE, 'received' => 0];
         // An empty file has nothing to send: it's done now.
         return $size === 0 ? $result + $this->appendUpload($user, $token, 0, '', $link) : $result;
@@ -688,8 +689,16 @@ final class Files
             [$nodeId, $u['store'], $u['object_key'], $u['key_enc'], $u['size'], $user['id'] ?? null, $now]);
         $db->run('UPDATE {file_nodes} SET version_id = ?, size = ?, mime = ?, updated_at = ? WHERE id = ?', [$versionId, $u['size'], $u['mime'], $now, $nodeId]);
         $db->run('DELETE FROM {file_uploads} WHERE id = ?', [$u['id']]);
+        // Saved by the editor (its changes up to a point), or a new version uploaded while it may be open.
+        $edit = new FileEdit($this->app);
+        $replaced = !empty($state['edit']) ? $edit->saved($nodeId, $versionId, $state['edit'], $user) : false;
+        if (empty($state['edit']) && $u['node_id']) {
+            $edit->replaced($nodeId, $versionId);
+        }
         $this->pruneVersions($nodeId);
-        $this->log($u['node_id'] ? 'version' : 'upload', $nodeId, $user, ['name' => $name], $link);
+        if (!$replaced) {
+            $this->log($u['node_id'] ? (!empty($state['edit']) ? 'edit' : 'version') : 'upload', $nodeId, $user, ['name' => $name], $link);
+        }
         $node = $this->node($nodeId);
         return $this->item($node, $user ? $this->role($user, $node) : null);
     }
@@ -1021,6 +1030,7 @@ final class Files
             $db->run('DELETE FROM {file_uploads} WHERE id = ?', [$u['id']]);
         }
         $db->run('DELETE FROM {file_activity} WHERE at < ?', [gmdate('Y-m-d H:i:s', time() - 90 * 86400)]);
+        (new FileEdit($this->app))->cleanup();
     }
 
     public function cleanupDue(): bool
