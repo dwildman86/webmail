@@ -35,7 +35,12 @@ final class Waf
     public const CLOUDFLARE = ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20',
         '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
         '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32'];
-    private const DEFAULTS = ['mode' => 'block', 'sensitivity' => 'normal', 'allow' => [], 'deny' => [], 'proxy' => 'direct', 'proxy_ranges' => []];
+    /** share: an hourly summary of attacks (address, kind, how many, when) goes to GhostParse's operators. */
+    private const DEFAULTS = ['mode' => 'block', 'sensitivity' => 'normal', 'allow' => [], 'deny' => [], 'proxy' => 'direct', 'proxy_ranges' => [], 'share' => true];
+    /** Not reported: the administrators' own block list, and forms that simply expired. */
+    private const NOT_SHARED = ['deny_list', 'failed_csrf'];
+    /** Events summarised in one report, at most. */
+    private const SHARE_BATCH = 5000;
     /** Query parameters people type freely into (a search): not checked for attacks. */
     private const FREE_TEXT = ['q'];
 
@@ -88,6 +93,9 @@ final class Waf
         }
         if (isset($in['proxy'])) {
             $s['proxy'] = in_array($in['proxy'], self::PROXIES, true) ? $in['proxy'] : throw new HttpError(422, 'Choose direct, Cloudflare or another proxy', 'bad_settings');
+        }
+        if (array_key_exists('share', $in)) {
+            $s['share'] = (bool) $in['share'];
         }
         foreach (['allow', 'deny', 'proxy_ranges'] as $k) {
             if (array_key_exists($k, $in)) {
@@ -538,6 +546,7 @@ final class Waf
         $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
         return [
             'settings' => $s,
+            'shared_at' => $this->sharedAt(),
             'your_ip' => self::clientIp(),
             // Behind Cloudflare without saying so: everyone looks like Cloudflare.
             'cloudflare_detected' => $s['proxy'] === 'direct' && Security::inRanges($remote, self::CLOUDFLARE),
@@ -556,6 +565,40 @@ final class Waf
                 'action' => $r['action'], 'score' => (int) $r['score'], 'method' => $r['method'], 'target' => $r['target'], 'detail' => $r['detail'], 'agent' => $r['agent']],
                 $db->all('SELECT * FROM {waf_events} ORDER BY id DESC LIMIT 200')),
         ];
+    }
+
+    /**
+     * The attacks since the last report, summarised for GhostParse: per address, kind and action, how many and when.
+     * Never what was in the requests. Private and reserved addresses are left out. Returns [reports, last event id].
+     */
+    public function shareSummary(int $afterId): array
+    {
+        $rows = $this->app->db->all('SELECT id, at, ip, rule, action FROM {waf_events} WHERE id > ? ORDER BY id LIMIT ' . self::SHARE_BATCH, [$afterId]);
+        $groups = [];
+        $last = $afterId;
+        foreach ($rows as $r) {
+            $k = "{$r['ip']}|{$r['rule']}|{$r['action']}";
+            if (!isset($groups[$k]) && count($groups) >= 500) {
+                break; // the rest go in the next report
+            }
+            $last = (int) $r['id'];
+            if (in_array($r['rule'], self::NOT_SHARED, true)
+                || !filter_var($r['ip'], FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                continue;
+            }
+            $when = gmdate('c', strtotime($r['at'] . ' UTC'));
+            $groups[$k] ??= ['ip' => $r['ip'], 'kind' => mb_substr(preg_replace('/[^a-z0-9_]/', '_', strtolower($r['rule'])), 0, 40), 'action' => $r['action'], 'count' => 0, 'first_at' => $when];
+            $groups[$k]['count']++;
+            $groups[$k]['last_at'] = $when;
+        }
+        return [array_values($groups), $last];
+    }
+
+    /** When the last summary went to GhostParse, if one has. */
+    private function sharedAt(): ?string
+    {
+        $at = (int) ((json_decode((string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'threat_share'"), true) ?: [])['at'] ?? 0);
+        return $at > 0 && $at <= time() ? gmdate('c', $at) : null;
     }
 
     /** Old counts and events go (with the due work). */

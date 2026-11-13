@@ -53,7 +53,8 @@ abstract class TestCase extends \PHPUnit\Framework\TestCase
         Schema::migrate($this->app->db);
         // The once-a-day and once-ever calls to GhostParse are done already, so other tests' background work doesn't make
         // them (ReceivingTest clears these to test them).
-        $this->app->db->run("INSERT INTO {meta} (k, v) VALUES ('checkin_at', ?), ('receiving_checked', ?)", [App::now(), App::now()]);
+        $this->app->db->run("INSERT INTO {meta} (k, v) VALUES ('checkin_at', ?), ('receiving_checked', ?), ('threat_share', ?)",
+            [App::now(), App::now(), json_encode(['at' => time() + 86400 * 365, 'last_id' => 0])]);
     }
 
     protected function tearDown(): void

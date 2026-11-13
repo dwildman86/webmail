@@ -3,6 +3,10 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.20.0
+- **Sharing attacks with GhostParse**: once an hour, the firewall sends GhostParse a summary of what it refused: the attacking address, the kind of attack, how many times and when. It never sends what was in the requests, or anything about your users or email. Private addresses, your own block list and expired forms are left out. It shows GhostParse what's attacking webmail installs, the first step towards protecting every install from attacks seen on any of them.
+- Turn it off under Settings → Firewall → **Share attacks with GhostParse**, which also shows when the last summary went. Nothing is blocked because of it.
+
 ## 1.19.0
 - **A daily check-in with GhostParse**: once a day, the webmail tells GhostParse its version, its web address, and how many users and mailboxes it has. That's counts only, never who the people are or any email. GhostParse uses it to support installs, to know which versions are in use before releasing an update, and to tell you when email can't reach your mailboxes. To turn it off, add `'checkin' => false` to config.php.
 

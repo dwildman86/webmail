@@ -2746,9 +2746,13 @@ async function firewallSettings() {
           proxyRanges),
         h("label", { class: "field" }, "Always allow", h("small", {}, "Never refused or blocked: your office, your monitoring service. One address or range a line."), ranges("allow", s.allow, "203.0.113.0/24  # office")),
         h("label", { class: "field" }, "Always block", h("small", {}, "Refused every time."), ranges("deny", s.deny, "")),
+        h("label", { class: "check address" }, h("input", { type: "checkbox", name: "share", checked: s.share !== false }),
+          h("span", {}, h("strong", {}, "Share attacks with GhostParse"),
+            h("small", { class: "muted" }, "Once an hour, a summary of what was refused: the attacking address, the kind of attack, how many times and when. Never what was in the requests, or anything about your users or email. It shows GhostParse what's attacking webmail installs, so they can all be better protected.",
+              f.shared_at ? ` Last sent ${when(f.shared_at)}.` : ""))),
         confirmPw()],
       "Save", async (v) => {
-        await api("admin/firewall", { method: "POST", body: { mode: v.mode, sensitivity: v.sensitivity, proxy: v.proxy, proxy_ranges: v.proxy_ranges || "", allow: v.allow, deny: v.deny, password: v.password } });
+        await api("admin/firewall", { method: "POST", body: { mode: v.mode, sensitivity: v.sensitivity, proxy: v.proxy, proxy_ranges: v.proxy_ranges || "", allow: v.allow, deny: v.deny, share: !!v.share, password: v.password } });
         toast("Saved."); openSettings("admin-firewall");
       }),
       h("p", { class: "muted small" }, "Locked yourself out? On the server: ", h("code", {}, "php security-reset.php"), " clears its blocks and block list.")));

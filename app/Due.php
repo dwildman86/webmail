@@ -55,7 +55,35 @@ final class Due
             || (bool) $this->app->db->value('SELECT 1 FROM {messages} WHERE parties_indexed = 0 LIMIT 1')
             || (bool) $this->app->db->value('SELECT 1 FROM {waf_rate} WHERE minute < ? LIMIT 1', [intdiv(time(), 60) - 60])
             || $this->receivingUnchecked()
-            || $this->checkInDue();
+            || $this->checkInDue()
+            || $this->shareDue();
+    }
+
+    /** Hourly, when sharing is on and the firewall has seen something since the last report. */
+    private function shareDue(): bool
+    {
+        $waf = (new Waf($this->app))->settings();
+        if (!$waf['share'] || $waf['mode'] === 'off') {
+            return false;
+        }
+        $state = json_decode((string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'threat_share'"), true) ?: [];
+        if (($state['at'] ?? 0) > time() - 3600) {
+            return false;
+        }
+        return (bool) $this->app->db->value('SELECT 1 FROM {waf_events} WHERE id > ? LIMIT 1', [(int) ($state['last_id'] ?? 0)]);
+    }
+
+    private function shareThreats(): void
+    {
+        $state = json_decode((string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'threat_share'"), true) ?: [];
+        $after = (int) ($state['last_id'] ?? 0);
+        // Marked first: a failure waits an hour, and the same events are sent then.
+        $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('threat_share', ?)", [json_encode(['at' => time(), 'last_id' => $after])]);
+        [$reports, $last] = (new Waf($this->app))->shareSummary($after);
+        if ($reports) {
+            $this->app->gp->reportThreats($reports);
+        }
+        $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('threat_share', ?)", [json_encode(['at' => time(), 'last_id' => $last])]);
     }
 
     /** Once a day, GhostParse is told this webmail's version and address, and how many users and mailboxes it has. */
@@ -109,6 +137,13 @@ final class Due
             // Email from before 1.14.0: who it's from and to, for the customer panel (a batch at a time).
             (new Mailstore($this->app))->indexOldParties(300);
             (new Waf($this->app))->cleanup();
+            if ($this->shareDue()) {
+                try {
+                    $this->shareThreats();
+                } catch (\Throwable $e) {
+                    error_log('webmail: sharing attacks with GhostParse failed: ' . $e->getMessage());
+                }
+            }
             if ($this->checkInDue()) {
                 try {
                     $this->checkIn();

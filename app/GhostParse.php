@@ -94,6 +94,12 @@ final class GhostParse
         return $this->request('POST', '/v1/webmail/heartbeat', $fields);
     }
 
+    /** The firewall's hourly summary of attacks (address, kind, how many, when). */
+    public function reportThreats(array $reports): array
+    {
+        return $this->request('POST', '/v1/webmail/threats', ['reports' => $reports]);
+    }
+
     /** POST /v1/domains/{id}/verify: GhostParse looks up the domain's DNS now. Returns ['domain' => …, 'checks' => …]. */
     public function verifyDomain(string $domainId): array
     {
