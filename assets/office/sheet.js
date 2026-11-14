@@ -238,6 +238,15 @@ function mount(host, ctx) {
     const f = F().format(v, cell.s?.nf);
     return { text: f.text, color: f.color, num: isNum(v) };
   }
+  /** How wide text is in a cell's font (measured once per text and style). */
+  const measurer = document.createElement("canvas").getContext("2d");
+  const widths = new Map();
+  function textWidth(text, st) {
+    const font = `${st?.i ? "italic " : ""}${st?.b ? "700 " : ""}${((st?.size || 11) * 4) / 3}px ${st?.font ? `"${st.font}", ` : ""}Calibri, Carlito, "Segoe UI", Arial, sans-serif`;
+    const key = font + "\u0000" + text;
+    if (!widths.has(key)) { if (widths.size > 5000) widths.clear(); measurer.font = font; widths.set(key, measurer.measureText(text).width); }
+    return widths.get(key);
+  }
   const mergeAt = (s, r, c) => s.merges.find((g) => r >= g.r1 && r <= g.r2 && c >= g.c1 && c <= g.c2);
   function drawCell(s, r, c, out, anchors) {
     const g = mergeAt(s, r, c);
@@ -255,7 +264,11 @@ function mount(host, ctx) {
     const halign = st?.h || (d.num ? "right" : d.bool || d.err ? "center" : "left");
     // Text that doesn't fit runs on into empty cells beside it.
     let w = box.w;
-    if (d.text && !st?.wrap && !g && halign === "left") { let cc = c + 1; while (cc < c + 12 && !s.cells.get(`${r},${cc}`)?.v && !s.cells.get(`${r},${cc}`)?.f && !mergeAt(s, r, cc) && w < d.text.length * 8 + 8) { w += cols.size(cc); cc++; } }
+    if (d.text && !st?.wrap && !g && halign === "left") {
+      const need = textWidth(d.text, st) + 10; // in the cell's own font and size
+      let cc = c + 1;
+      while (cc < c + 12 && w < need && !s.cells.get(`${r},${cc}`)?.v && !s.cells.get(`${r},${cc}`)?.f && !mergeAt(s, r, cc)) { w += cols.size(cc); cc++; }
+    }
     el.style.left = `${box.x}px`; el.style.top = `${box.y}px`; el.style.width = `${w}px`; el.style.height = `${box.h}px`;
     if (w > box.w) el.classList.add("spill");
     if (st) {
@@ -367,7 +380,9 @@ function mount(host, ctx) {
     box("ox-active", sel.r, sel.c, g ? g.r2 : sel.r, g ? g.c2 : sel.c);
     if (!ctx.readOnly) for (const p of box("ox-fill", r2, c2, r2, c2).slice(-1)) {
       p.title = "Drag to fill";
-      p.style.left = `${parseFloat(p.style.left) + parseFloat(p.style.width) - 4}px`; p.style.top = `${parseFloat(p.style.top) + parseFloat(p.style.height) - 4}px`;
+      // On the corner, as in Excel; tucked inside the cell at a frozen pane's edge, where the pane would cut it in half.
+      const inside = p.parentNode !== layers.body;
+      p.style.left = `${parseFloat(p.style.left) + parseFloat(p.style.width) - (inside ? 9 : 4)}px`; p.style.top = `${parseFloat(p.style.top) + parseFloat(p.style.height) - (inside ? 9 : 4)}px`;
       p.style.width = "8px"; p.style.height = "8px";
     }
     placeInput();
@@ -422,9 +437,10 @@ function mount(host, ctx) {
   const rawText = (cell) => {
     if (cell.v === null || cell.v === undefined) return "";
     if (typeof cell.v === "boolean") return cell.v ? "TRUE" : "FALSE";
-    if (isNum(cell.v) && cell.s?.nf && /[dmyhs]/i.test(cell.s.nf.replace(/"[^"]*"/g, "")) && !/^\[?h\]?:mm$/.test(cell.s.nf)) return F().format(cell.v, cell.s.nf.includes("h") ? (dmy ? "dd/mm/yyyy hh:mm" : "mm/dd/yyyy hh:mm") : dmy ? "dd/mm/yyyy" : "mm/dd/yyyy").text;
+    if (isNum(cell.v) && cell.s?.nf && /[dmyhs]/i.test(cell.s.nf.replace(/"[^"]*"|\[(?![hms]+\])[^\]]*\]/gi, "")) && !/^\[?h\]?:mm$/.test(cell.s.nf)) return F().format(cell.v, cell.s.nf.includes("h") ? (dmy ? "dd/mm/yyyy hh:mm" : "mm/dd/yyyy hh:mm") : dmy ? "dd/mm/yyyy" : "mm/dd/yyyy").text;
     if (isNum(cell.v) && cell.s?.nf && cell.s.nf.includes("%")) return `${Math.round(cell.v * 1e12) / 1e10}%`;
-    if (typeof cell.v === "string" && (/^[=+-]/.test(cell.v) || F().parseInput(cell.v, { dmy }).type !== "text")) return "'" + cell.v;
+    // Text that would be read as something else if typed again (a number, a date, TRUE, a formula) gets an apostrophe.
+    if (typeof cell.v === "string" && (/^[=+-]/.test(cell.v) || typeof F().parseInput(cell.v, { dmy }).value !== "string")) return "'" + cell.v;
     return String(cell.v);
   };
 

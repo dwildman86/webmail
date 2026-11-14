@@ -129,6 +129,9 @@ class Editor {
     window.addEventListener("beforeunload", this.onUnload);
     this.onVisible = () => { if (!document.hidden) this.schedule(50); };
     document.addEventListener("visibilitychange", this.onVisible);
+    // Back online: send what was kept here now, not after the back-off from the failed tries.
+    this.onOnline = () => { this.failures = 0; this.schedule(0); };
+    window.addEventListener("online", this.onOnline);
   }
 
   async start() {
@@ -302,10 +305,14 @@ class Editor {
 
   // ---------------------------------------------------------------------------------------------- sync
 
+  /** Syncs in `ms`, unless one is already due sooner: steady typing must not keep pushing the next sync back. */
   schedule(ms) {
     if (this.closed) return;
+    const due = Date.now() + ms;
+    if (this.timer && this.due <= due) return;
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.sync(), ms);
+    this.due = due;
+    this.timer = setTimeout(() => { this.timer = null; this.sync(); }, ms);
   }
   idleDelay() {
     if (document.hidden) return 8000;
@@ -537,6 +544,7 @@ class Editor {
     document.body.classList.remove("ox-open");
     window.removeEventListener("beforeunload", this.onUnload);
     document.removeEventListener("visibilitychange", this.onVisible);
+    window.removeEventListener("online", this.onOnline);
     if (current === this) current = null;
     this.opts.onClose?.();
   }
