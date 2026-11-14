@@ -66,6 +66,12 @@ const PATHS = {
   track: "M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4 M13 20h7",
   review: "M4 6h10 M4 10h10 M4 14h6 M14 17l2.5 2.5L21 15",
   footnote: "M4 6h12 M4 10h12 M4 14h7 M17 15h3v6 M16 21h5 M4 19h7",
+  textBox: "M4 5h16v14H4z M8 9h8 M12 9v6",
+  shapes: "M4 13h7v7H4z M16.5 4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z M13 20l3.5-6 3.5 6z",
+  outline: "M4 4h16v16H4z M8 8h8v8H8z",
+  background: "M4 5h16v14H4z M4 15l5-5 4 4 3-3 4 4",
+  layers: "M12 3l9 5-9 5-9-5z M3 13l9 5 9-5",
+  play: "M7 4.5v15l12-7.5z",
 };
 const icon = (name) => h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
   h("path", { d: PATHS[name] || "" }));

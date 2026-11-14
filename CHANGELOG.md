@@ -3,6 +3,12 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.25.0
+- **Presentations**: PowerPoint files (.pptx) open in an editor in the webmail, and Files → New makes one, blank or from a template (pitch, project update, team meeting). Add slides from layouts (title, title and content, section, two content), text boxes, shapes, lines and arrows, and pictures. Move, resize and rotate them by hand, with guides that snap to the slide's centre and to other things. Format text with fonts, sizes, colours, alignment and bulleted or numbered lists. Fill and outline shapes, put things in front or behind, flip them, set each slide's background, drag slides into order, hide slides, and write speaker notes.
+- **Present**: show the slides full screen, moving on with the arrow keys, the space bar or a click.
+- **Edit together, live**: everyone with edit access can work on the same presentation at once, even typing in the same text box. Each person's selection shows in their colour and name, and the slide list shows who's on which slide. Changes save as real PowerPoint files, which open in PowerPoint, Keynote, LibreOffice and Google Slides.
+- PowerPoint files with tables, charts, SmartArt, video, animations or slide transitions in them open to view, with Edit a copy.
+
 ## 1.24.0
 - **Track changes** in documents: turn it on (Ctrl+Shift+E) and everyone's edits are marked, each person in their own colour, with who made each change and when. Deleted text stays, struck through, until someone accepts or rejects it. Go from change to change, and accept or reject one change, a selection or everything at once. Tracked changes open and save with Word files, so Word shows them too.
 - **Footnotes and endnotes**: add one where the cursor is (Ctrl+Alt+F or Ctrl+Alt+D) and type its text at the foot of the document. They're numbered as you go, and saved as real Word footnotes and endnotes.

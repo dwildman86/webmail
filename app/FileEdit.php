@@ -18,7 +18,7 @@ namespace Webmail;
 final class FileEdit
 {
     /** File types the editors open. */
-    public const TYPES = ['docx' => 'document', 'xlsx' => 'spreadsheet', 'csv' => 'spreadsheet', 'txt' => 'text', 'md' => 'text'];
+    public const TYPES = ['docx' => 'document', 'xlsx' => 'spreadsheet', 'csv' => 'spreadsheet', 'pptx' => 'presentation', 'txt' => 'text', 'md' => 'text'];
     /** Gone from the list of who's here after this long without asking for changes. */
     private const AWAY_SECONDS = 25;
     private const MAX_OP_BYTES = 6 * 1024 * 1024;

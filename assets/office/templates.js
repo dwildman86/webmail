@@ -108,5 +108,34 @@ const SHEETS = [
   ], { cols: { 0: 280, 1: 120, 2: 100, 3: 70 }, freeze: { r: 1, c: 0 } }) },
 ];
 
-window.OfficeTemplates = { document: DOCS, spreadsheet: SHEETS };
+// Presentations: slides from the editor's layouts, with words in them.
+const PR = () => window.OfficePresModel;
+const SIZE = { w: 1280, h: 720 };
+const fill = (els, texts) => els.map((e, i) => { const t = texts[i]; if (t === undefined || !e.blocks) return e; const def = e.blocks[0].def || {}; const lines = Array.isArray(t) ? t : [t];
+  return { ...e, blocks: lines.map((x) => { const [text, level] = Array.isArray(x) ? x : [x, 0]; return { ...e.blocks[0], id: D().newId(), runs: text ? [{ text, ...def }] : [], ...(e.blocks[0].list ? { list: { ...e.blocks[0].list, level } } : {}), hint: undefined }; }) }; });
+const slideOf = (kind, texts, theme = {}, extra = {}) => ({ id: "s" + PR().newId().slice(1), bg: "#ffffff", ...extra, els: [...(extra.shapes || []), ...fill(PR().layout(kind, SIZE, theme), texts)] });
+const bar = (color, x, y, w, h) => ({ id: PR().newId(), type: "shape", shape: "rect", x, y, w, h, fill: color });
+const deck = (slides) => ({ size: SIZE, slides: slides.map(({ shapes, ...s }) => s) });
+const PRES = [
+  { id: "blank", name: "Blank presentation", make: () => deck([slideOf("title", [])]) },
+  { id: "pitch", name: "Pitch", make: () => { const t = { accent: "#ffffff", ink: "#dbeafe" }, c = { accent: "#1e3a5f", ink: "#1f2937" }; return deck([
+    slideOf("title", ["Your company", "One line about what you do"], t, { bg: "#1e3a5f", shapes: [bar("#f59e0b", 560, 400, 160, 6)] }),
+    slideOf("content", ["The problem", ["Who has it", "What it costs them", "Why now"]], c, { shapes: [bar("#f59e0b", 83, 150, 120, 6)] }),
+    slideOf("content", ["Our answer", ["What we do", "How it works", "Why it's better"]], c, { shapes: [bar("#f59e0b", 83, 150, 120, 6)] }),
+    slideOf("two", ["The numbers", ["Customers", "Revenue"], ["Growth", "Plans"]], c, { shapes: [bar("#f59e0b", 83, 150, 120, 6)] }),
+    slideOf("section", ["Thank you", "your@email.com"], t, { bg: "#1e3a5f" }),
+  ]); } },
+  { id: "update", name: "Project update", make: () => { const c = { accent: "#0f766e", ink: "#1f2937" }; return deck([
+    slideOf("title", ["Project update", new Date().toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" })], c, { shapes: [bar("#0f766e", 0, 0, 1280, 24)] }),
+    slideOf("content", ["Where we are", ["Done since last time", "In progress", "Next up"]], c, { shapes: [bar("#0f766e", 0, 0, 1280, 12)] }),
+    slideOf("content", ["Risks and help needed", ["Risk, and what we're doing about it", "Decision needed from…"]], c, { shapes: [bar("#0f766e", 0, 0, 1280, 12)] }),
+  ]); } },
+  { id: "meeting", name: "Team meeting", make: () => { const c = { accent: "#7c3aed", ink: "#1f2937" }; return deck([
+    slideOf("title", ["Team meeting", "Agenda and notes"], c, { shapes: [bar("#7c3aed", 0, 0, 40, 720)] }),
+    slideOf("content", ["Agenda", ["Last week", "This week", "Anything else"]], c, { shapes: [bar("#7c3aed", 0, 0, 20, 720)] }),
+    slideOf("content", ["Actions", ["Who does what, by when"]], c, { shapes: [bar("#7c3aed", 0, 0, 20, 720)] }),
+  ]); } },
+];
+
+window.OfficeTemplates = { document: DOCS, spreadsheet: SHEETS, presentation: PRES };
 })();

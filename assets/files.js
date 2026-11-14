@@ -20,7 +20,7 @@ const fmtWhen = (iso) => {
 const VIEWS = [["mine", "My files", "folder"], ["shared", "Shared with me", "people"], ["recent", "Recent", "clock"], ["vault", "Private vault", "lock"], ["trash", "Bin", "trash"]];
 const kindIcon = (it) => it.kind === "folder" ? "folder" : /^image\//.test(it.mime) ? "image" : "file";
 /** Files the editors open: documents, spreadsheets, text. */
-const EDITABLE = /\.(docx|xlsx|csv|txt|md)$/i;
+const EDITABLE = /\.(docx|xlsx|pptx|csv|txt|md)$/i;
 const editable = (it) => it.kind === "file" && EDITABLE.test(it.name || "") && FS.view !== "vault" && FS.view !== "trash";
 
 // ------------------------------------------------------------------------------------------------ the editors (assets/office), loaded the first time they're needed
@@ -30,7 +30,7 @@ function loadOffice() {
   if (officeLoading) return officeLoading;
   const v = (document.querySelector('script[src*="files.js"]')?.getAttribute("src") || "").split("?v=")[1] || "";
   document.head.append(W().h("link", { rel: "stylesheet", href: `assets/office/office.css?v=${v}` }));
-  const names = ["formula", "ooxml", "collab", "sheet-model", "sheet-extras", "doc-model", "editor", "text", "sheet", "doc", "templates"];
+  const names = ["formula", "ooxml", "collab", "sheet-model", "sheet-extras", "doc-model", "pres-model", "pptx", "editor", "text", "sheet", "doc", "slides", "templates"];
   // In order (async off), all requested at once.
   officeLoading = Promise.all(names.map((n) => new Promise((ok, bad) => {
     const el = document.createElement("script");
@@ -51,14 +51,14 @@ async function openEditor(it) {
 async function newOffice(kind) {
   try { await loadOffice(); } catch (err) { W().toast(err.message); return; }
   const { h } = W();
-  const ext = { document: "docx", spreadsheet: "xlsx", text: "txt" }[kind];
+  const ext = { document: "docx", spreadsheet: "xlsx", presentation: "pptx", text: "txt" }[kind];
   const templates = window.OfficeTemplates[kind] || [{ id: "blank", name: "Blank", make: () => window.OfficeKinds.text.blank() }];
-  const chosen = templates.length === 1 ? templates[0] : await dialog(kind === "document" ? "New document" : "New spreadsheet", (body, done) => {
+  const chosen = templates.length === 1 ? templates[0] : await dialog(kind === "document" ? "New document" : kind === "presentation" ? "New presentation" : "New spreadsheet", (body, done) => {
     body.append(h("div", { class: "files-templates" }, templates.map((t) => h("button", { type: "button", class: "files-template", onclick: () => done(t) },
       h("span", { class: `files-template-art ${kind} ${t.id}` }), h("span", {}, t.name)))));
   }, { wide: true });
   if (!chosen) return;
-  const base = chosen.id === "blank" ? (kind === "document" ? "Untitled document" : kind === "spreadsheet" ? "Untitled spreadsheet" : "Notes") : chosen.name;
+  const base = chosen.id === "blank" ? (kind === "document" ? "Untitled document" : kind === "spreadsheet" ? "Untitled spreadsheet" : kind === "presentation" ? "Untitled presentation" : "Notes") : chosen.name;
   const name = await ask("Name", "Name", `${base}.${ext}`);
   if (!name) return;
   const finalName = new RegExp(`\\.${ext}$`, "i").test(name) || (kind === "spreadsheet" && /\.csv$/i.test(name)) || (kind === "text" && /\.md$/i.test(name)) ? name : `${name}.${ext}`;
@@ -149,6 +149,7 @@ function render() {
         { label: "Folder", icon: "folder", run: newFolder },
         { label: "Document", icon: "file", hint: ".docx", run: () => newOffice("document") },
         { label: "Spreadsheet", icon: "layers", hint: ".xlsx", run: () => newOffice("spreadsheet") },
+        { label: "Presentation", icon: "file", hint: ".pptx", run: () => newOffice("presentation") },
         { label: "Text file", icon: "note", hint: ".txt", run: () => newOffice("text") }]) }, icon("compose"), "New"),
       canAdd && h("button", { class: "btn btn-primary", type: "button", onclick: () => fileIn.click() }, icon("upload"), "Upload"), fileIn,
       d.view === "trash" && d.items.length > 0 && h("button", { class: "btn", type: "button", onclick: emptyBin }, "Empty bin")));

@@ -1232,6 +1232,8 @@ function mount(host, ctx) {
 }
 
 window.OfficeKinds = window.OfficeKinds || {};
+// The page ↔ paragraphs machinery, for other editors with text in them (slides).
+window.OfficeDocDom = { paraEl, readPara, readRuns, offsetIn, domAt, lastLeaf, imageData, hex };
 const blankDoc = () => ({ page: { size: /^en-US|^en-CA/i.test(navigator.language) ? "Letter" : "A4", margins: { t: 25, r: 25, b: 25, l: 25 } }, blocks: [{ id: D().newId(), type: "p", runs: [] }], header: null, footer: null });
 window.OfficeKinds.document = {
   get model() { return D(); },
