@@ -57,6 +57,123 @@ final class Meet
         return $s;
     }
 
+    /**
+     * What GhostParse allows this organisation (GET /v1/me features.meetings, set per account by GhostParse's
+     * operators): on or off, people per meeting, guests, recording, and its relay. Asked at most every 10 minutes (each
+     * usage report brings it too); the last answer stands while GhostParse can't be reached.
+     */
+    public function policy(bool $refresh = false): array
+    {
+        $defaults = ['enabled' => true, 'max_people' => self::MAX_PEOPLE, 'guests' => true, 'recording' => true, 'relay' => true];
+        $known = json_decode((string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'meet_policy'"), true);
+        if (!$refresh && is_array($known) && ($known['at'] ?? 0) > $this->now() - 600) {
+            return $known['policy'] + $defaults;
+        }
+        try {
+            $p = $this->app->gp->me()['features']['meetings'] ?? null;
+        } catch (\Throwable) {
+            // Unreachable: the last answer stands, asked again in a minute (not on every request meanwhile).
+            $last = (is_array($known) ? $known['policy'] : []) + $defaults;
+            $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('meet_policy', ?)", [json_encode(['at' => $this->now() - 540, 'policy' => $last])]);
+            return $last;
+        }
+        return $this->rememberPolicy(is_array($p) ? $p : $defaults) + $defaults;
+    }
+
+    private function rememberPolicy(array $p): array
+    {
+        $clean = ['enabled' => (bool) ($p['enabled'] ?? true), 'max_people' => max(2, min(self::MAX_PEOPLE, (int) ($p['max_people'] ?? self::MAX_PEOPLE))),
+            'guests' => (bool) ($p['guests'] ?? true), 'recording' => (bool) ($p['recording'] ?? true), 'relay' => (bool) ($p['relay'] ?? true)];
+        $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('meet_policy', ?)", [json_encode(['at' => $this->now(), 'policy' => $clean])]);
+        return $clean;
+    }
+
+    /** What applies: this webmail's own settings within what GhostParse allows. */
+    public function effective(): array
+    {
+        $s = $this->settings();
+        $p = $this->policy();
+        return ['enabled' => $s['enabled'] && $p['enabled'], 'guests' => $s['guests'] && $p['guests'], 'recording' => $p['recording'], 'max' => $p['max_people'],
+            'days' => $s['days'], 'policy' => $p];
+    }
+
+    private function max(): int
+    {
+        return $this->effective()['max'];
+    }
+
+    // ------------------------------------------------------------------------------------------------- usage counts
+
+    /** A count for the next report to GhostParse (numbers only: never who, or which meeting). */
+    private function bump(string $what, int $n = 1): void
+    {
+        $this->app->db->run("INSERT INTO {meta} (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = CAST(v AS SIGNED) + ?", ["meet_n_$what", (string) $n, $n]);
+    }
+
+    private function peak(int $people): void
+    {
+        $this->app->db->run("INSERT INTO {meta} (k, v) VALUES ('meet_n_peak', ?) ON DUPLICATE KEY UPDATE v = GREATEST(CAST(v AS SIGNED), ?)", [(string) $people, $people]);
+    }
+
+    /** What's going on now, across every meeting here. */
+    private function live(): array
+    {
+        $row = $this->app->db->one("SELECT COUNT(DISTINCT room_id) AS meetings, COUNT(*) AS people, SUM(user_id IS NULL) AS guests FROM {meet_peers} WHERE status = 'in' AND seen_at > ?",
+            [self::at($this->now() - self::GONE_AFTER)]);
+        return ['meetings' => (int) ($row['meetings'] ?? 0), 'people' => (int) ($row['people'] ?? 0), 'guests' => (int) ($row['guests'] ?? 0)];
+    }
+
+    /**
+     * Time to tell GhostParse? Every 5 minutes while there's something to say: meetings going on, counts waiting, or
+     * meetings that were going on at the last report and have finished since.
+     */
+    public function reportDue(): bool
+    {
+        $last = json_decode((string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'meet_report'"), true) ?: [];
+        if (($last['at'] ?? 0) > $this->now() - 300) {
+            return false;
+        }
+        return ($last['active'] ?? 0) > 0 || $this->live()['people'] > 0
+            || (bool) $this->app->db->value("SELECT 1 FROM {meta} WHERE k LIKE 'meet\\_n\\_%' AND v <> '0' LIMIT 1");
+    }
+
+    /** The counts since the last report, sent to GhostParse; its answer brings this organisation's policy. */
+    public function report(): void
+    {
+        $db = $this->app->db;
+        $last = json_decode((string) $db->value("SELECT v FROM {meta} WHERE k = 'meet_report'"), true) ?: [];
+        $live = $this->live();
+        $minutes = (int) round(min(15, max(0, $this->now() - ($last['at'] ?? $this->now())) / 60) * $live['people']);
+        $counts = [];
+        foreach (['started', 'joined', 'guests', 'full', 'recordings', 'peak'] as $k) {
+            $counts[$k] = (int) $db->value('SELECT v FROM {meta} WHERE k = ?', ["meet_n_$k"]);
+        }
+        // Marked first: GhostParse unreachable is tried again in five minutes, with these counts still waiting.
+        $db->run("REPLACE INTO {meta} (k, v) VALUES ('meet_report', ?)", [json_encode(['at' => $this->now(), 'active' => $live['meetings']])]);
+        $r = $this->app->gp->request('POST', '/v1/webmail/meetings', [
+            'active_meetings' => $live['meetings'], 'people_now' => $live['people'], 'guests_now' => $live['guests'],
+            'meetings_started' => $counts['started'], 'people_joined' => $counts['joined'], 'guests_joined' => $counts['guests'],
+            'person_minutes' => $minutes, 'peak_people' => max($counts['peak'], $live['people'] ? $this->largestNow() : 0),
+            'full_refusals' => $counts['full'], 'recordings' => $counts['recordings'],
+        ]);
+        // What was sent is taken off (counts made meanwhile stay for next time).
+        foreach (['started', 'joined', 'guests', 'full', 'recordings'] as $k) {
+            if ($counts[$k]) {
+                $db->run('UPDATE {meta} SET v = CAST(v AS SIGNED) - ? WHERE k = ?', [$counts[$k], "meet_n_$k"]);
+            }
+        }
+        $db->run("UPDATE {meta} SET v = '0' WHERE k = 'meet_n_peak'");
+        if (is_array($r['policy'] ?? null)) {
+            $this->rememberPolicy($r['policy']);
+        }
+    }
+
+    private function largestNow(): int
+    {
+        return (int) $this->app->db->value("SELECT MAX(n) FROM (SELECT COUNT(*) AS n FROM {meet_peers} WHERE status = 'in' AND seen_at > ? GROUP BY room_id) x",
+            [self::at($this->now() - self::GONE_AFTER)]);
+    }
+
     private function now(): int
     {
         return time();
@@ -72,9 +189,10 @@ final class Meet
     /** A new meeting, by someone signed in: its link. $messageId: the email it was started from (its subject is the title). */
     public function create(array $user, string $title = '', ?int $messageId = null): array
     {
-        $s = $this->settings();
+        $s = $this->effective();
         if (!$s['enabled']) {
-            throw new HttpError(403, 'Meetings are turned off. An administrator can turn them on in Settings → Meetings.', 'meet_off');
+            throw new HttpError(403, $s['policy']['enabled'] ? 'Meetings are turned off. An administrator can turn them on in Settings → Meetings.'
+                : 'Meetings aren\'t available for this organisation. Ask GhostParse support.', 'meet_off');
         }
         if ($messageId) {
             $m = (new Mailstore($this->app))->get($user['id'], $messageId, false); // throws when it isn't theirs
@@ -129,7 +247,7 @@ final class Meet
         if (!$room || strtotime($room['expires_at'] . ' UTC') <= $this->now()) {
             throw new HttpError(404, 'This meeting link has expired or doesn\'t exist. Ask whoever sent it for a new one.', 'no_meeting');
         }
-        if (!$this->settings()['enabled']) {
+        if (!$this->effective()['enabled']) {
             throw new HttpError(403, 'Meetings are turned off here.', 'meet_off');
         }
         $room['title'] = (string) $this->app->crypto->decrypt($room['title_enc'], 'meet.title');
@@ -138,7 +256,8 @@ final class Meet
 
     public function describe(array $room, ?array $user): array
     {
-        return ['title' => $room['title'], 'guests' => $this->settings()['guests'], 'locked' => (bool) $room['locked'], 'max' => self::MAX_PEOPLE,
+        $e = $this->effective();
+        return ['title' => $room['title'], 'guests' => $e['guests'], 'recording' => $e['recording'], 'locked' => (bool) $room['locked'], 'max' => $e['max'],
             'here' => $this->count((int) $room['id']), 'host' => $user !== null && (int) $room['owner_id'] === $user['id']];
     }
 
@@ -149,10 +268,15 @@ final class Meet
             [$roomId, self::at($this->now() - self::GONE_AFTER), $except]);
     }
 
-    private function full(int $roomId, int $except = 0): void
+    /** Refused when the meeting already has as many as it can; counted (for GhostParse) unless $count is false. */
+    private function full(int $roomId, int $except = 0, bool $count = true): void
     {
-        if ($this->count($roomId, $except) >= self::MAX_PEOPLE) {
-            throw new HttpError(409, 'This meeting is full: up to ' . self::MAX_PEOPLE . ' people can be in it at once.', 'meeting_full');
+        $max = $this->max();
+        if ($this->count($roomId, $except) >= $max) {
+            if ($count) {
+                $this->bump('full');
+            }
+            throw new HttpError(409, "This meeting is full: it already has $max people, the most a meeting can have. You can join when someone leaves.", 'meeting_full');
         }
     }
 
@@ -170,8 +294,9 @@ final class Meet
             $name = $user['name'] !== '' ? $user['name'] : (string) $user['email'];
             $this->full($roomId);
             $status = 'in';
+            $before = $this->count($roomId);
         } else {
-            if (!$this->settings()['guests']) {
+            if (!$this->effective()['guests']) {
                 throw new HttpError(403, 'Only people with an account here can join this meeting.', 'guests_off');
             }
             if ($room['locked']) {
@@ -185,13 +310,33 @@ final class Meet
                 throw new HttpError(429, 'Too many people are waiting to join this meeting. Try again in a minute.', 'lobby_full');
             }
             $status = 'lobby';
+            // Knocking on a full meeting: someone turned away for now (counted once, here, not again if let-in is refused).
+            if ($this->count($roomId) >= $this->max()) {
+                $this->bump('full');
+            }
         }
         $secret = sodium_bin2base64(random_bytes(32), SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING);
         $now = self::at($this->now());
         $id = $this->app->db->insert('INSERT INTO {meet_peers} (room_id, secret_hash, user_id, name_enc, status, state, joined_at, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
             $roomId, hash('sha256', $secret), $user['id'] ?? null, $this->app->crypto->encrypt(mb_substr($name, 0, 60), 'meet.name'), $status, '{}', $now, $now]);
         $this->app->db->run('UPDATE {meet_rooms} SET used_at = ? WHERE id = ?', [$now, $roomId]);
+        if ($status === 'in') {
+            $this->joined($roomId, $before ?? 0, false);
+        }
         return ['id' => $id, 'secret' => $secret, 'status' => $status, 'name' => $name, 'member' => $user !== null];
+    }
+
+    /** Counted for the report: someone in, the meeting started when they're the first, and its size. */
+    private function joined(int $roomId, int $before, bool $guest): void
+    {
+        if ($before === 0) {
+            $this->bump('started');
+        }
+        $this->bump('joined');
+        if ($guest) {
+            $this->bump('guests');
+        }
+        $this->peak($before + 1);
     }
 
     /** The person a secret belongs to, in this meeting. */
@@ -222,7 +367,7 @@ final class Meet
         $now = $this->now();
         $roomId = (int) $room['id'];
         // Gone a while (a laptop lid closed) and the meeting filled up meanwhile: back through the door.
-        if ($peer['status'] === 'in' && strtotime($peer['seen_at'] . ' UTC') < $now - self::GONE_AFTER && $this->count($roomId, $peer['id']) >= self::MAX_PEOPLE) {
+        if ($peer['status'] === 'in' && strtotime($peer['seen_at'] . ' UTC') < $now - self::GONE_AFTER && $this->count($roomId, $peer['id']) >= $this->max()) {
             $db->run("UPDATE {meet_peers} SET status = 'left' WHERE id = ?", [$peer['id']]);
             $peer['status'] = 'left';
         }
@@ -230,7 +375,9 @@ final class Meet
         if ($after > 0) {
             $db->run('DELETE FROM {meet_signals} WHERE to_peer = ? AND id <= ?', [$peer['id'], $after]);
         }
-        $out = ['status' => $peer['status'], 'me' => $peer['id'], 'title' => $room['title'], 'locked' => (bool) $room['locked'], 'people' => [], 'lobby' => [], 'signals' => []];
+        $max = $this->max();
+        $out = ['status' => $peer['status'], 'me' => $peer['id'], 'title' => $room['title'], 'locked' => (bool) $room['locked'], 'max' => $max,
+            'full' => $this->count($roomId) >= $max, 'people' => [], 'lobby' => [], 'signals' => []];
         if ($peer['status'] !== 'in') {
             return $out;
         }
@@ -292,6 +439,13 @@ final class Meet
         if (!empty($clean['r']) && $peer['user_id'] === null) {
             throw new HttpError(403, 'Only people with an account here can record a meeting.', 'record_members');
         }
+        if (!empty($clean['r']) && !$this->effective()['recording']) {
+            throw new HttpError(403, 'Recording meetings isn\'t available for this organisation.', 'record_off');
+        }
+        $was = json_decode((string) $peer['state'], true) ?: [];
+        if (!empty($clean['r']) && empty($was['r'])) {
+            $this->bump('recordings');
+        }
         $this->app->db->run('UPDATE {meet_peers} SET state = ? WHERE id = ?', [json_encode($clean), $peer['id']]);
         return $clean;
     }
@@ -308,9 +462,13 @@ final class Meet
             throw new HttpError(404, 'They\'re not waiting any more.', 'not_waiting');
         }
         if ($allow) {
-            $this->full((int) $room['id']);
+            $this->full((int) $room['id'], 0, false);
+            $before = $this->count((int) $room['id']);
         }
         $this->app->db->run('UPDATE {meet_peers} SET status = ? WHERE id = ?', [$allow ? 'in' : 'denied', $guestId]);
+        if ($allow) {
+            $this->joined((int) $room['id'], $before, true);
+        }
     }
 
     /** The meeting's host (or an administrator) takes someone out of it. */
@@ -410,13 +568,14 @@ final class Meet
             case 'POST meet/create':
                 Http::json($this->create($user, (string) ($in['title'] ?? ''), isset($in['message_id']) ? (int) $in['message_id'] : null), 201);
             case 'GET meet':
-                Http::json(['meetings' => $this->mine($user), 'settings' => $this->settings(), 'max' => self::MAX_PEOPLE]);
+                $e = $this->effective();
+                Http::json(['meetings' => $this->mine($user), 'settings' => ['enabled' => $e['enabled'], 'guests' => $e['guests'], 'days' => $e['days']], 'max' => $e['max']]);
             case 'POST meet/end':
                 $this->end($user, (int) ($in['id'] ?? 0));
                 Http::json(['ok' => true]);
             case 'GET meet/settings':
                 (new Auth($this->app))->requireAdmin();
-                Http::json($this->settings());
+                Http::json($this->settings() + ['policy' => $this->policy(true)]);
             case 'POST meet/settings':
                 (new Auth($this->app))->requireAdmin();
                 Http::json($this->saveSettings($in));

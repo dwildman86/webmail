@@ -3177,7 +3177,12 @@ async function meetingsDialog() {
 async function meetSettings() {
   const s = await api("meet/settings");
   const check = (name, label, hint) => h("label", { class: "check address" }, h("input", { type: "checkbox", name, checked: !!s[name] }), h("span", {}, h("strong", {}, label), h("small", { class: "muted" }, hint)));
+  // What GhostParse allows this organisation: these win over the settings below.
+  const p = s.policy || {};
+  const limits = [!p.enabled && "meetings are turned off", p.enabled && p.max_people < 6 && `meetings have up to ${p.max_people} people`, p.enabled && !p.guests && "guests can't join",
+    p.enabled && !p.recording && "recording is off", p.enabled && !p.relay && "the relay for strict networks is off"].filter(Boolean);
   return h("section", {}, h("h3", {}, "Video meetings"),
+    limits.length ? h("div", { class: "notice warn" }, `For this organisation, GhostParse has set: ${limits.join(", ")}. Ask GhostParse support to change it.`) : null,
     h("p", { class: "muted small" }, "Meetings run in the browser. Sound and video go directly between the people in a meeting, encrypted (WebRTC); this server only introduces them and keeps nothing of the meeting. When two people can't connect directly, GhostParse's relay carries the encrypted media. Up to 6 people per meeting."),
     formFor([
       check("enabled", "Meetings", "Anyone with an account here can start one: from an email (Meet now), Meetings in the menu, or a calendar event."),

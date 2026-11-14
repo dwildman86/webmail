@@ -3,6 +3,11 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.27.0
+- **Full meetings, made clear**: someone asking to join a meeting that already has 6 people is told it's full and can be let in as soon as someone leaves. The people in the meeting see who's waiting and why "Let in" isn't offered yet.
+- **Limits from GhostParse**: GhostParse can set what your organisation's meetings allow (how many people, guests, recording, the relay for strict networks). Any limit shows in **Settings → Meetings**.
+- **Usage counts to GhostParse**: while meetings are going on, the webmail tells GhostParse every few minutes how many meetings and people there are, how long they lasted, and how many people were turned away because a meeting was full. Only numbers: never names, titles, links or anything said.
+
 ## 1.26.0
 - **Meetings**: video calls in the browser, with nothing to install. **Meet now** on an email starts one named after it and offers to reply with the link. **Meetings** in the side menu starts one or opens one again, and **Add video call** puts a meeting link in a calendar event.
 - Customers and others without an account join from the link: they give their name and wait until someone in the meeting lets them in. Administrators can stop guests joining in **Settings → Meetings**.

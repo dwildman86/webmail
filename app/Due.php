@@ -58,7 +58,8 @@ final class Due
             || $this->checkInDue()
             || $this->shareDue()
             || $this->filesDue()
-            || (new Meet($this->app))->cleanupDue();
+            || (new Meet($this->app))->cleanupDue()
+            || (new Meet($this->app))->reportDue();
     }
 
     /** Files: the bin emptied, abandoned uploads tidied, or stored files being moved to another store. */
@@ -160,6 +161,13 @@ final class Due
                 }
             }
             $meet = new Meet($this->app);
+            if ($meet->reportDue()) {
+                try {
+                    $meet->report();
+                } catch (\Throwable $e) {
+                    error_log('webmail: meeting report to GhostParse failed: ' . $e->getMessage());
+                }
+            }
             if ($meet->cleanupDue()) {
                 try {
                     $meet->cleanup();

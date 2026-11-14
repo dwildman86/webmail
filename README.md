@@ -154,6 +154,12 @@ screen sharing, raised hands, chat, and recording.
   other file; nothing is recorded on any server during the meeting.
 - Meetings need the webmail's `https://` address (browsers only allow cameras on secure pages).
 - **Settings → Meetings** (administrators): turn meetings off, stop guests joining, and choose how long links last.
+  GhostParse can also set limits for your organisation (fewer people per meeting, no guests, no recording, no relay);
+  they show there, and win over these settings.
+- **When a meeting is full**, anyone else is told so; a guest waits in the lobby and can be let in when someone leaves.
+- **Usage counts**: every few minutes while meetings are going on, the webmail tells GhostParse how many meetings and
+  people there are, how many minutes they lasted, and how many people were turned away because a meeting was full.
+  Only numbers: never names, titles, links or anything said.
 
 ### Files
 

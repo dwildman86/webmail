@@ -248,4 +248,92 @@ final class MeetTest extends TestCase
         $this->fails(fn () => $this->meet->create($this->sarah), 403, '/turned off/');
         $this->assertSame(['enabled' => false, 'guests' => true, 'days' => 30], $this->meet->settings());
     }
+
+    public function testGhostParsesLimitsForThisOrganisationWin(): void
+    {
+        $this->answers['GET /v1/me'] = fn () => [200, ['account' => ['id' => 'acct'], 'features' => ['meetings' => ['enabled' => true, 'max_people' => 3, 'guests' => false, 'recording' => false, 'relay' => true]]]];
+        $this->assertSame(['enabled' => true, 'guests' => false, 'recording' => false, 'max' => 3], array_intersect_key($this->meet->effective(), ['enabled' => 1, 'guests' => 1, 'recording' => 1, 'max' => 1]));
+        $room = $this->meet->room($this->meet->create($this->sarah)['token']);
+        $s = $this->meet->join($room, $this->sarah, '');
+        $this->meet->join($room, $this->kim, '');
+        $this->meet->join($room, $this->alex, '');
+        $e = $this->fails(fn () => $this->meet->join($room, $this->alex, ''), 409, '/already has 3 people/');
+        $this->assertSame('meeting_full', $e->errorCode);
+        $poll = $this->meet->poll($room, $this->peerRow($room, $s), 0);
+        $this->assertTrue($poll['full']);
+        $this->assertSame(3, $poll['max']);
+        $this->fails(fn () => $this->meet->join($room, null, 'A guest'), 403, '/account/');
+        $this->fails(fn () => $this->meet->setState($this->peerRow($room, $s), ['r' => true]), 403, '/Recording/');
+        $this->assertSame(3, $this->meet->describe($room, $this->sarah)['max']);
+        // Asked once, then remembered for 10 minutes.
+        $asked = count(array_filter($this->requests, fn ($r) => $r['path'] === '/v1/me'));
+        $this->meet->effective();
+        $this->assertSame($asked, count(array_filter($this->requests, fn ($r) => $r['path'] === '/v1/me')));
+
+        // Turned off altogether.
+        $this->answers['GET /v1/me'] = fn () => [200, ['features' => ['meetings' => ['enabled' => false]]]];
+        $this->meet->policy(true);
+        $this->fails(fn () => $this->meet->create($this->sarah), 403, '/GhostParse/');
+    }
+
+    public function testGhostParseUnreachableKeepsTheLastAnswerAndDoesntAskOnEveryRequest(): void
+    {
+        $this->answers['GET /v1/me'] = fn () => [200, ['features' => ['meetings' => ['enabled' => true, 'max_people' => 4]]]];
+        $this->assertSame(4, $this->meet->effective()['max']);
+        $this->answers['GET /v1/me'] = fn () => [503, ['error' => 'down', 'message' => 'Down']];
+        $this->assertSame(4, $this->meet->policy(true)['max_people']);
+        $asked = count($this->requests);
+        $this->meet->effective();
+        $this->meet->effective();
+        $this->assertSame($asked, count($this->requests), 'not asked again for a minute');
+    }
+
+    public function testUsageIsReportedAsCountsOnlyAndBringsThePolicy(): void
+    {
+        $this->answers['GET /v1/me'] = fn () => [200, ['features' => ['meetings' => ['enabled' => true]]]];
+        $sent = [];
+        $this->answers['POST /v1/webmail/meetings'] = function (array $body) use (&$sent) {
+            $sent[] = $body;
+            return [200, ['ok' => true, 'policy' => ['enabled' => true, 'max_people' => 5, 'guests' => true, 'recording' => true, 'relay' => true]]];
+        };
+        $this->assertFalse($this->meet->reportDue(), 'nothing to say yet');
+        $room = $this->meet->room($this->meet->create($this->sarah, 'Private: the Henderson account')['token']);
+        $s = $this->meet->join($room, $this->sarah, '');
+        $g = $this->meet->join($room, null, 'Pat Customer');
+        $this->meet->admit($room, $this->peerRow($room, $s), $g['id'], true);
+        $this->meet->setState($this->peerRow($room, $s), ['r' => true]);
+        $this->assertTrue($this->meet->reportDue());
+        $this->meet->report();
+        $this->assertCount(1, $sent);
+        $this->assertSame(['active_meetings' => 1, 'people_now' => 2, 'guests_now' => 1, 'meetings_started' => 1, 'people_joined' => 2, 'guests_joined' => 1,
+            'person_minutes' => 0, 'peak_people' => 2, 'full_refusals' => 0, 'recordings' => 1], $sent[0]);
+        $this->assertStringNotContainsString('Henderson', json_encode($sent));
+        $this->assertStringNotContainsString('Pat', json_encode($sent));
+        // The policy came back with it; the counts sent were taken off.
+        $this->assertSame(5, $this->meet->effective()['max']);
+        $this->assertFalse($this->meet->reportDue(), 'not again within five minutes');
+        $this->app->db->run("UPDATE {meta} SET v = ? WHERE k = 'meet_report'", [json_encode(['at' => time() - 600, 'active' => 1])]);
+        $this->meet->leave($this->peerRow($room, $s));
+        $this->meet->leave($this->peerRow($room, $g));
+        $this->assertTrue($this->meet->reportDue(), 'meetings ended since the last report: said once more');
+        $this->meet->report();
+        $this->assertSame(['active_meetings' => 0, 'people_now' => 0, 'meetings_started' => 0, 'people_joined' => 0, 'recordings' => 0],
+            array_intersect_key($sent[1], ['active_meetings' => 1, 'people_now' => 1, 'meetings_started' => 1, 'people_joined' => 1, 'recordings' => 1]));
+        $this->app->db->run("UPDATE {meta} SET v = ? WHERE k = 'meet_report'", [json_encode(['at' => time() - 600, 'active' => 0])]);
+        $this->assertFalse($this->meet->reportDue(), 'then quiet');
+    }
+
+    public function testMeetingsTurnedAwayWhenFullAreCounted(): void
+    {
+        $this->answers['GET /v1/me'] = fn () => [200, ['features' => ['meetings' => ['enabled' => true, 'max_people' => 2]]]];
+        $room = $this->meet->room($this->meet->create($this->sarah)['token']);
+        $s = $this->meet->join($room, $this->sarah, '');
+        $this->meet->join($room, $this->kim, '');
+        $g = $this->meet->join($room, null, 'Guest');
+        $this->fails(fn () => $this->meet->admit($room, $this->peerRow($room, $s), $g['id'], true), 409);
+        $this->fails(fn () => $this->meet->join($room, $this->alex, ''), 409);
+        $this->assertTrue($this->meet->poll($room, $this->peerRow($room, $g), 0)['full'], 'the guest waiting is told');
+        // The guest knocking on a full meeting and Alex refused: two (the refused let-in isn't counted again).
+        $this->assertSame('2', (string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'meet_n_full'"));
+    }
 }

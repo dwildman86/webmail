@@ -11,7 +11,7 @@
 (() => {
   const D = document.body.dataset;
   const ROOM = D.room;
-  const MAX = Number(D.max || 6);
+  let MAX = Number(D.max || 6); // the most people in a meeting (6, or less if the organisation's limit is lower)
   const MEMBER = D.member || "";
   const $root = document.getElementById("meet");
 
@@ -351,13 +351,17 @@
         if (before === "lobby" && r.status === "in") { await admitted(); }
         else if (r.status !== "in" && r.status !== "lobby") { ended(r.status); return; }
       }
+      if (r.max) MAX = r.max;
+      if (r.status === "lobby" && !!r.full !== meeting.full) { meeting.full = !!r.full; renderLobby(); }
       if (r.status === "in") {
         for (const s of r.signals) { lastSignal = Math.max(lastSignal, s.id); onSignal(s); lastActivity = Date.now(); }
+        meeting.full = !!r.full; // before the knocks below, so a knock on a full meeting doesn't offer "Let in"
         roster(r.people);
         const known = new Set(lobby.map((x) => x.id));
         lobby = r.lobby || [];
         for (const g of lobby) if (!known.has(g.id)) knock(g);
         if (r.locked !== meeting.locked) { meeting.locked = r.locked; render(); }
+        render();
       }
     } catch (err) {
       if (err.status === 401) { ended("left"); return; }
@@ -367,7 +371,7 @@
       polling = false;
     }
   }
-  const meeting = { locked: false };
+  const meeting = { locked: false, full: false };
   function roster(list) {
     const here = new Set();
     for (const p of list) {
@@ -411,7 +415,8 @@
 
   // ---------------------------------------------------------------------------------------------- the lobby (people with an account let guests in)
   function knock(g) {
-    toast(`${g.name} wants to join.`, { label: "Let in", run: () => admit(g.id, true) });
+    if (meeting.full) toast(`${g.name} wants to join, but the meeting is full (${MAX} people).`);
+    else toast(`${g.name} wants to join.`, { label: "Let in", run: () => admit(g.id, true) });
     render();
   }
   async function admit(id, allow) {
@@ -704,7 +709,9 @@
   function renderLobby() {
     $root.replaceChildren(h("main", { class: "mt-card" }, h("p", { class: "mt-brand" }, D.app || "Webmail"), h("h1", {}, D.title || "Meeting"),
       h("div", { class: "mt-spinner", "aria-hidden": "true" }),
-      h("p", {}, "Asking to join…"), h("p", { class: "muted" }, "You'll join as soon as someone in the meeting lets you in."),
+      h("p", {}, "Asking to join…"),
+      meeting.full ? h("p", { class: "mt-full-note" }, `The meeting is full right now: it already has ${MAX} people, the most a meeting can have. You can be let in as soon as someone leaves.`)
+        : h("p", { class: "muted" }, "You'll join as soon as someone in the meeting lets you in."),
       h("button", { class: "mt-btn", onclick: leave }, "Cancel")));
   }
   function ended(status) {
@@ -746,7 +753,7 @@
     if (me.status !== "in") return;
     const others = [...people.values()].filter((p) => p.name);
     const key = JSON.stringify([others.map((p) => [p.id, p.name, p.member, p.host, p.state, p.conn?.pc.connectionState, p.conn?.stream.getTracks().map((t) => [t.id, t.muted, t.readyState])]),
-      lobby.map((g) => g.id), panel, chat.length, unreadChat, myState(), local.mic?.id, sendingVideo()?.id, pinned, meeting.locked, me.host, me.name]);
+      lobby.map((g) => g.id), panel, chat.length, unreadChat, myState(), local.mic?.id, sendingVideo()?.id, pinned, meeting.locked, meeting.full, MAX, me.host, me.name]);
     if (!force && key === lastKey) return;
     lastKey = key;
     const focused = document.activeElement?.classList.contains("mt-chat-input") ? document.activeElement : null;
@@ -770,7 +777,7 @@
         ctl(local.videoOn && !!local.cam, "cam", "camOff", local.videoOn ? "Turn camera off (Ctrl+E)" : "Turn camera on (Ctrl+E)", toggleCam),
         navigator.mediaDevices.getDisplayMedia && toggle(!!local.screen, "screen", local.screen ? "Stop presenting" : "Present your screen", toggleScreen),
         toggle(local.hand, "hand", local.hand ? "Lower your hand" : "Raise your hand", toggleHand),
-        me.member && h("button", { class: `mt-round${local.recording ? " rec" : ""}`, title: local.recording ? "Stop recording" : "Record the meeting", "aria-label": local.recording ? "Stop recording" : "Record the meeting", "aria-pressed": String(local.recording), onclick: toggleRecording }, icon("rec")),
+        me.member && D.recording !== "0" && h("button", { class: `mt-round${local.recording ? " rec" : ""}`, title: local.recording ? "Stop recording" : "Record the meeting", "aria-label": local.recording ? "Stop recording" : "Record the meeting", "aria-pressed": String(local.recording), onclick: toggleRecording }, icon("rec")),
         h("button", { class: "mt-round", title: "More", "aria-label": "More", onclick: (e) => moreMenu(e.currentTarget) }, icon("more")),
         h("button", { class: "mt-round leave", title: "Leave the meeting", "aria-label": "Leave the meeting", onclick: leave }, icon("leave"))),
       h("div", { class: "mt-bar-right" },
@@ -778,8 +785,9 @@
         toggle(panel === "chat", "chat", "Chat", () => openPanel("chat"), unreadChat || null)));
     $root.replaceChildren(h("div", { class: `mt-room${panel ? " with-panel" : ""}` },
       recordingBy.length ? h("div", { class: "mt-recording", role: "status" }, h("span", { class: "mt-dot" }), `${recordingBy.join(", ")} recording this meeting.`) : null,
-      lobby.length && panel !== "people" ? h("div", { class: "mt-knock", role: "status" }, `${lobby.map((g) => g.name).join(", ")} ${lobby.length > 1 ? "want" : "wants"} to join.`,
-        h("button", { class: "mt-btn small primary", onclick: () => admit(lobby[0].id, true) }, lobby.length > 1 ? `Let ${lobby[0].name} in` : "Let in"),
+      lobby.length && panel !== "people" ? h("div", { class: "mt-knock", role: "status" }, `${lobby.map((g) => g.name).join(", ")} ${lobby.length > 1 ? "want" : "wants"} to join`,
+        meeting.full ? `, but the meeting is full (${MAX} people). Someone has to leave first.` : ".",
+        !meeting.full && me.member && h("button", { class: "mt-btn small primary", onclick: () => admit(lobby[0].id, true) }, lobby.length > 1 ? `Let ${lobby[0].name} in` : "Let in"),
         h("button", { class: "mt-btn small", onclick: () => openPanel("people") }, "See all")) : null,
       stage, panel && sidePanel(), bar));
     tickClock();
@@ -811,10 +819,10 @@
       !self && me.host && h("button", { class: "mt-btn small", onclick: async () => { if (await confirmBox(`Remove ${p.name}?`, "They'll leave the meeting now. They can ask to join again unless you lock the meeting.", "Remove")) call("remove", { peer_id: p.id }).catch((err) => toast(err.message)); } }, "Remove"));
     return h("aside", { class: "mt-panel", "aria-label": "People" }, h("div", { class: "mt-panel-head" }, h("h2", {}, `People (${people.size + 1} of ${MAX})`), close),
       lobby.length ? h("div", { class: "mt-lobby" }, h("h3", {}, "Waiting to join"), h("ul", {}, lobby.map((g) => h("li", { class: "mt-person" }, h("span", { class: "mt-avatar small", vars: { "--h": hue(g.name) } }, initials(g.name)), h("span", { class: "grow" }, g.name),
-        me.member ? [h("button", { class: "mt-btn small primary", onclick: () => admit(g.id, true) }, "Let in"), h("button", { class: "mt-btn small", onclick: () => admit(g.id, false) }, "Deny")] : null)))) : null,
+        me.member ? [h("button", { class: "mt-btn small primary", disabled: meeting.full, title: meeting.full ? `The meeting is full (${MAX} people)` : null, onclick: () => admit(g.id, true) }, "Let in"), h("button", { class: "mt-btn small", onclick: () => admit(g.id, false) }, "Deny")] : null)))) : null,
       h("h3", {}, "In the meeting"),
       h("ul", {}, person({ name: me.name || "You", member: me.member, host: me.host, state: myState() }, true), [...people.values()].filter((p) => p.name).map((p) => person(p, false))),
-      people.size + 1 >= MAX ? h("p", { class: "muted small" }, `The meeting is full: up to ${MAX} people can be in a meeting at once.`) : null,
+      people.size + 1 >= MAX ? h("p", { class: "muted small" }, `The meeting is full: up to ${MAX} people can be in a meeting at once. Anyone else waits until someone leaves.`) : null,
       h("div", { class: "mt-row" }, h("button", { class: "mt-btn", onclick: copyLink }, icon("link"), "Copy the meeting link")));
   }
   function moreMenu(anchor) {

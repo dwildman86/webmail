@@ -75,7 +75,7 @@ try {
         $room = $meet->room($token);
         $info = $meet->describe($room, $user);
         $page($room['title'], '<noscript><main class="meet-card"><h1>' . $e($room['title']) . '</h1><p>Meetings need JavaScript turned on.</p></main></noscript><div id="meet"></div>', 200, [
-            'room' => $token, 'title' => $room['title'], 'app' => $appName, 'max' => $info['max'], 'guests' => $info['guests'] ? '1' : '0', 'host' => $info['host'] ? '1' : '0',
+            'room' => $token, 'title' => $room['title'], 'app' => $appName, 'max' => $info['max'], 'guests' => $info['guests'] ? '1' : '0', 'recording' => $info['recording'] ? '1' : '0', 'host' => $info['host'] ? '1' : '0',
             'member' => $user ? ($user['name'] !== '' ? $user['name'] : $user['email']) : '', 'csrf' => $user ? Auth::csrfToken() : '', 'webmail' => $base . '/',
         ]);
     }
