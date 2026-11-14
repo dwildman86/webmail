@@ -870,7 +870,12 @@ function editEvent(e, times = null) {
           h("div", { class: "when-line" }, h("span", { class: "muted" }, "Ends"), endD, endT),
           h("div", { class: "row tight" }, h("label", { class: "check" }, allDayIn, "All day"), repeatSel), custom,
           h("div", { class: "muted small" }, TZ))),
-      h("div", { class: "when-row" }, icon("pin"), locationIn),
+      h("div", { class: "when-row" }, icon("pin"), h("div", { class: "row tight grow" }, locationIn, h("button", { type: "button", class: "btn btn-sm nowrap", title: "Make a video meeting for this event and put its link here", onclick: async (ev) => {
+        const btn = ev.currentTarget; btn.disabled = true;
+        try { const r = await api("meet/create", { method: "POST", body: { title: titleIn.value.trim() } }); locationIn.value = r.url; locationIn.dispatchEvent(new Event("input", { bubbles: true })); toast("Video call link added."); }
+        catch (err) { toast(err.message); }
+        btn.disabled = false;
+      } }, icon("video"), "Add video call"))),
       h("div", { class: "when-row" }, icon("calendar"), h("div", { class: "row tight grow" }, calSel, colorBtn)),
       h("div", { class: "when-row" }, icon("bell"), remBox),
       h("div", { class: "when-row" }, icon("note"), notesIn),

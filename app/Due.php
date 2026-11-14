@@ -57,7 +57,8 @@ final class Due
             || $this->receivingUnchecked()
             || $this->checkInDue()
             || $this->shareDue()
-            || $this->filesDue();
+            || $this->filesDue()
+            || (new Meet($this->app))->cleanupDue();
     }
 
     /** Files: the bin emptied, abandoned uploads tidied, or stored files being moved to another store. */
@@ -156,6 +157,14 @@ final class Due
                     }
                 } catch (\Throwable $e) {
                     error_log('webmail: Files housekeeping failed: ' . $e->getMessage());
+                }
+            }
+            $meet = new Meet($this->app);
+            if ($meet->cleanupDue()) {
+                try {
+                    $meet->cleanup();
+                } catch (\Throwable $e) {
+                    error_log('webmail: Meet housekeeping failed: ' . $e->getMessage());
                 }
             }
             if ($this->shareDue()) {

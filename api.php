@@ -339,6 +339,9 @@ try {
     if ($action === 'rules' || str_starts_with($action, 'rules/') || str_starts_with($action, 'labels/')) {
         (new \Webmail\Rules($app))->route($action, $method, $user);
     }
+    if ($action === 'meet' || str_starts_with($action, 'meet/')) {
+        (new \Webmail\Meet($app))->route($action, $method, $user);
+    }
     if (str_starts_with($action, 'team/')) {
         (new \Webmail\Team($app))->route($action, $method, $user);
     }

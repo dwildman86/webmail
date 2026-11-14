@@ -13,7 +13,7 @@ final class Schema
     /** Every table the webmail makes (without the prefix). */
     public static function tables(): array
     {
-        return ['file_comments', 'file_edit_presence', 'file_edit_ops', 'file_edit_state', 'vault_keys', 'file_activity', 'file_links', 'file_shares', 'file_uploads', 'file_versions', 'file_nodes', 'waf_events', 'waf_rate', 'waf_ips', 'message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
+        return ['meet_signals', 'meet_peers', 'meet_rooms', 'file_comments', 'file_edit_presence', 'file_edit_ops', 'file_edit_state', 'vault_keys', 'file_activity', 'file_links', 'file_shares', 'file_uploads', 'file_versions', 'file_nodes', 'waf_events', 'waf_rate', 'waf_ips', 'message_parties', 'cal_events', 'cal_members', 'cal_calendars', 'data_requests', 'api_keys', 'rules', 'message_labels', 'labels', 'scheduled', 'templates', 'draft_presence', 'shared_drafts', 'thread_notes', 'thread_state', 'sessions', 'imports', 'address_book', 'mfa_recovery_codes', 'passkeys', 'push_subscriptions', 'login_attempts', 'events', 'contacts', 'search', 'attachments', 'messages', 'user_mailboxes', 'mailboxes', 'users', 'meta'];
     }
 
     public static function migrations(): array
@@ -641,6 +641,51 @@ final class Schema
                     resolved_by INT UNSIGNED NULL,
                     KEY comment_node (node_id),
                     FOREIGN KEY (node_id) REFERENCES {file_nodes}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            ],
+            // Meet: video meetings. Rooms are links; people in them and the connection details relayed between their
+            // browsers (deleted once fetched). No media ever reaches the server.
+            15 => [
+                "CREATE TABLE IF NOT EXISTS {meet_rooms} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    token_hash CHAR(64) NOT NULL UNIQUE,
+                    token_enc TEXT NOT NULL,
+                    title_enc TEXT NOT NULL,
+                    owner_id INT UNSIGNED NULL,
+                    message_id INT UNSIGNED NULL,
+                    locked TINYINT(1) NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL,
+                    used_at DATETIME NOT NULL,
+                    expires_at DATETIME NOT NULL,
+                    KEY meet_owner (owner_id, used_at),
+                    KEY meet_expires (expires_at),
+                    FOREIGN KEY (owner_id) REFERENCES {users}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {meet_peers} (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    room_id INT UNSIGNED NOT NULL,
+                    secret_hash CHAR(64) NOT NULL UNIQUE,
+                    user_id INT UNSIGNED NULL,
+                    name_enc TEXT NOT NULL,
+                    status VARCHAR(8) NOT NULL,
+                    state VARCHAR(100) NOT NULL DEFAULT '{}',
+                    joined_at DATETIME NOT NULL,
+                    seen_at DATETIME NOT NULL,
+                    KEY meet_peer_room (room_id, status, seen_at),
+                    KEY meet_peer_seen (seen_at),
+                    FOREIGN KEY (room_id) REFERENCES {meet_rooms}(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+                "CREATE TABLE IF NOT EXISTS {meet_signals} (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    room_id INT UNSIGNED NOT NULL,
+                    from_peer INT UNSIGNED NOT NULL,
+                    to_peer INT UNSIGNED NOT NULL,
+                    kind VARCHAR(12) NOT NULL,
+                    payload_enc MEDIUMTEXT NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    KEY meet_signal_to (to_peer, id),
+                    KEY meet_signal_created (created_at),
+                    FOREIGN KEY (room_id) REFERENCES {meet_rooms}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
         ];

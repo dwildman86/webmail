@@ -132,6 +132,29 @@ marks.
 
 Reminders are sent with the rest of the webmail's due work (see the next section): for reminders on time when nobody has the webmail open, add the `due.php` cron job.
 
+### Meetings
+
+Video calls in the browser, with nothing to install. **Meet now** on an email starts one named after it (and offers a
+reply with the link); **Meetings** in the side menu starts one or opens one again; **Add video call** on a calendar
+event puts a meeting link in the event. People with an account here join straight away. Anyone else with the link (a
+customer, say) gives their name and waits until someone in the meeting lets them in. There's a mute, a camera switch,
+screen sharing, raised hands, chat, and recording.
+
+- **Up to 6 people per meeting.** Everyone connects directly to everyone else (WebRTC), so each person sends their video
+  to each of the others; home and office connections manage that up to about six. Bigger meetings need a media server
+  (an SFU), which shared hosting can't run.
+- **Private by design.** Sound and video go directly between the people in the meeting, encrypted (DTLS-SRTP). This
+  server only introduces their browsers to each other: those connection details are kept encrypted for the seconds it
+  takes the other person to fetch them, then deleted. Chat goes directly between the browsers too and isn't kept.
+- **When two people can't connect directly** (strict office networks), GhostParse's relay (TURN) carries the encrypted
+  media. It can't see or hear it, and keeps nothing. Without GhostParse, a public STUN server is used, which is enough
+  for most home and mobile connections.
+- **Recording** is for people with an account here. Everyone in the meeting is shown that it's being recorded. It's
+  made in the recorder's browser and saved to their Files (Meeting recordings) when they stop, encrypted like every
+  other file; nothing is recorded on any server during the meeting.
+- Meetings need the webmail's `https://` address (browsers only allow cameras on secure pages).
+- **Settings → Meetings** (administrators): turn meetings off, stop guests joining, and choose how long links last.
+
 ### Files
 
 **Files** in the side menu: documents and folders like OneDrive, encrypted wherever they're stored. Included on every

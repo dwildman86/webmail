@@ -39,6 +39,7 @@ const ICONS = {
   back: "M15 5l-7 7 7 7",
   menu: "M4 7h16 M4 12h16 M4 17h16",
   close: "M6 6l12 12 M18 6L6 18",
+  video: "M3 7h12v10H3z M15 10l6-3v10l-6-3",
   share: "M12 3v12 M8 7l4-4 4 4 M8 11H6v10h12V11h-2",
   folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   file: "M6 3h8l4 4v14H6z M14 3v4h4",
@@ -420,10 +421,11 @@ function renderFolders() {
   $search.placeholder = state.folder === "contacts" ? "Search contacts" : "Search mail";
   $search.setAttribute("aria-label", $search.placeholder);
   $shell.classList.toggle("cal-mode", state.folder === "calendar" || state.folder === "files");
-  $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"], ["calendar", "Calendar", "calendar"], ["files", "Files", "folder"]].map(([key, label, ic]) => {
-    const n = key === "scheduled" ? state.scheduledCount : ["starred", "snoozed", "contacts", "calendar", "files"].includes(key) ? 0 : unreadFor(key);
+  $folders.replaceChildren(...[...FOLDERS, ["contacts", "Contacts", "contacts"], ["calendar", "Calendar", "calendar"], ["files", "Files", "folder"], ["meet", "Meetings", "video"]].map(([key, label, ic]) => {
+    const n = key === "scheduled" ? state.scheduledCount : ["starred", "snoozed", "contacts", "calendar", "files", "meet"].includes(key) ? 0 : unreadFor(key);
     return h("li", { class: key === "contacts" ? "sep" : "" }, h("a", { href: "#", class: state.folder === key && !state.query ? "on" : "", onclick: (e) => {
       e.preventDefault();
+      if (key === "meet") { meetingsDialog(); return; }
       openFolder(key);
     } }, icon(ic), label, n > 0 && key !== "sent" && key !== "drafts" && key !== "trash" ? h("span", { class: `badge${key === "scheduled" ? " quiet" : ""}` }, n > 99 ? "99+" : String(n)) : null));
   }), ...labelLinks());
@@ -951,6 +953,7 @@ async function openMessage(id) {
     h("span", { class: "spacer" }),
     m.folder !== "drafts" && h("button", { class: `icon-btn customer-toggle${customerPanelOpen() ? " on-soft" : ""}`, title: "Customer: their history and details (i)", "aria-label": "Customer details",
       "aria-pressed": String(customerPanelOpen()), onclick: (e) => { toggleCustomerPanel(); e.currentTarget.classList.toggle("on-soft", customerPanelOpen()); e.currentTarget.setAttribute("aria-pressed", String(customerPanelOpen())); } }, icon("contacts")),
+    m.folder !== "drafts" && h("button", { class: "icon-btn", title: "Meet now: a video call about this email", "aria-label": "Meet now", onclick: () => meetNow({ of: last(), messageId: m.id }) }, icon("video")),
     h("button", { class: "icon-btn", title: "Reply (r)", "aria-label": "Reply", onclick: () => compose({ mode: "reply", of: last() }) }, icon("reply")),
     h("button", { class: "icon-btn", title: "Reply all", "aria-label": "Reply all", onclick: () => compose({ mode: "replyAll", of: last() }) }, icon("replyAll")),
     h("button", { class: "icon-btn", title: "Forward (f)", "aria-label": "Forward", onclick: () => compose({ mode: "forward", of: last() }) }, icon("forward")));
@@ -2140,7 +2143,7 @@ async function openSettings(tab = "account") {
   document.querySelector(".overlay.settings-overlay")?.remove();
   const body = h("div", { class: "tab-body" });
   const tabs = [["account", "Account"], ["mailboxes", "Mailboxes"], ["templates", "Templates"], ["rules", "Rules & labels"], ["import", "Import email"], ["security", "Sign-in & alerts"],
-    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-security", "Security"], ["admin-firewall", "Firewall"], ["admin-files", "Files"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
+    ...(state.user.role === "admin" ? [["admin-users", "Users"], ["admin-security", "Security"], ["admin-firewall", "Firewall"], ["admin-files", "Files"], ["admin-meet", "Meetings"], ["admin-mailboxes", "Connect addresses"], ["admin-data-requests", "Data requests"], ["admin-status", "Status"]] : [])];
   const nav = h("nav", { class: "tabs" });
   const show = async (key) => {
     nav.replaceChildren(...tabs.map(([k, label]) => h("button", { class: k === key ? "on" : "", "aria-current": k === key ? "page" : null, onclick: () => show(k) }, label)));
@@ -2847,6 +2850,7 @@ const SETTINGS = {
   async "admin-security"() { return securityPolicy(); },
   async "admin-firewall"() { return firewallSettings(); },
   async "admin-files"() { return filesSettings(); },
+  async "admin-meet"() { return meetSettings(); },
   async "admin-users"() {
     const [{ users }, { mailboxes }] = await Promise.all([api("admin/users"), api("admin/mailboxes")]);
     const boxes = (selected) => h("div", {}, mailboxes.map((m) => h("label", { class: "check" }, h("input", { type: "checkbox", name: `mb_${m.id}`, checked: selected.includes(m.id) }), m.address)));
@@ -3117,7 +3121,75 @@ function receivingSection(domains) {
   return h("section", {}, h("h3", {}, "Receiving email"), ...domains.map(card));
 }
 
-window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo, popMenu, confirmPw, formFor, size, csrf: () => csrf,
+// ------------------------------------------------------------------------------------------------ meetings (Meet)
+// Video meetings open in their own tab (meet.php). Started from an email ("Meet now": its subject is the meeting's
+// name, and a reply with the link is offered), from Meetings in the menu, or from a calendar event.
+
+/** A new meeting, opened in a new tab. The tab is opened first (in the click), or browsers block it. */
+async function meetNow({ of = null, messageId = null, title = "" } = {}) {
+  const tab = window.open("", "_blank");
+  try {
+    const r = await api("meet/create", { method: "POST", body: { title, message_id: messageId } });
+    if (tab) { tab.opener = null; tab.location.href = r.url; } else toast("Allow pop-ups for this site to open meetings in a new tab.", { label: "Open it here", run: () => { location.href = r.url; } });
+    if (of) toast("Meeting started.", { label: "Send them the link", run: () => compose({ mode: "reply", of, text: `Join me on a video call: ${r.url}\n` }) });
+    else toast("Meeting started.", { label: "Copy the link", run: () => copyText(r.url, "Meeting link copied.") });
+    return r;
+  } catch (err) {
+    tab?.close();
+    toast(err.message);
+    return null;
+  }
+}
+async function copyText(text, done) {
+  try { await navigator.clipboard.writeText(text); toast(done); } catch { prompt("Copy this:", text); }
+}
+
+/** Meetings: start one, and the ones you started lately (open again, copy the link, end it). */
+async function meetingsDialog() {
+  document.querySelector(".overlay.meet-overlay")?.remove();
+  const body = h("div", { class: "pad" }, h("p", { class: "muted" }, "Loading…"));
+  const overlay = h("div", { class: "overlay center meet-overlay", onclick: (e) => { if (e.target === overlay) overlay.remove(); }, onkeydown: (e) => { if (e.key === "Escape") overlay.remove(); } },
+    h("div", { class: "dialog small-dialog", role: "dialog", "aria-label": "Meetings" },
+      h("div", { class: "dialog-head" }, h("h2", {}, "Meetings"), h("button", { class: "icon-btn", "aria-label": "Close", onclick: () => overlay.remove() }, icon("close"))), body));
+  document.body.append(overlay);
+  const show = async () => {
+    let r;
+    try { r = await api("meet"); } catch (err) { body.replaceChildren(h("div", { class: "notice bad" }, err.message)); return; }
+    if (!r.settings.enabled) { body.replaceChildren(h("p", {}, "Meetings are turned off.", state.user.role === "admin" ? " Turn them on in Settings → Meetings." : " An administrator can turn them on.")); return; }
+    const titleIn = h("input", { class: "input grow", placeholder: "What's it about? (optional)", maxlength: 200, "aria-label": "Meeting name" });
+    body.replaceChildren(
+      h("form", { class: "row", onsubmit: async (e) => { e.preventDefault(); if (await meetNow({ title: titleIn.value.trim() })) show(); } }, titleIn, h("button", { class: "btn btn-primary" }, icon("video"), "New meeting")),
+      h("p", { class: "muted small" }, `Up to ${r.max} people, sound and video directly between them, encrypted. ${r.settings.guests ? "Anyone you send the link to can ask to join; someone in the meeting lets them in." : "Only people with an account here can join."} Links last ${r.settings.days} days.`),
+      r.meetings.length ? h("ul", { class: "meet-list" }, r.meetings.map((m) => h("li", {},
+        h("div", { class: "grow" }, h("strong", {}, m.title), h("div", { class: "muted small" }, `Started ${whenShort(m.created_at.replace(" ", "T") + "Z")}`, m.here ? ` · ${m.here} in it now` : "")),
+        h("a", { class: "btn btn-sm", href: m.url, target: "_blank", rel: "noopener" }, "Open"),
+        h("button", { class: "btn btn-sm", onclick: () => copyText(m.url, "Meeting link copied.") }, "Copy link"),
+        h("button", { class: "btn btn-sm", title: "The link stops working and anyone in it leaves", onclick: async () => {
+          if (!confirm(`End "${m.title}"? Its link stops working.`)) return;
+          try { await api("meet/end", { method: "POST", body: { id: m.id } }); show(); } catch (err) { toast(err.message); }
+        } }, "End")))) : h("p", { class: "muted" }, "Meetings you start show here, to open again or send the link."));
+    titleIn.focus();
+  };
+  show();
+}
+
+/** Settings → Meetings (administrators). */
+async function meetSettings() {
+  const s = await api("meet/settings");
+  const check = (name, label, hint) => h("label", { class: "check address" }, h("input", { type: "checkbox", name, checked: !!s[name] }), h("span", {}, h("strong", {}, label), h("small", { class: "muted" }, hint)));
+  return h("section", {}, h("h3", {}, "Video meetings"),
+    h("p", { class: "muted small" }, "Meetings run in the browser. Sound and video go directly between the people in a meeting, encrypted (WebRTC); this server only introduces them and keeps nothing of the meeting. When two people can't connect directly, GhostParse's relay carries the encrypted media. Up to 6 people per meeting."),
+    formFor([
+      check("enabled", "Meetings", "Anyone with an account here can start one: from an email (Meet now), Meetings in the menu, or a calendar event."),
+      check("guests", "Guests can join", "People without an account (customers) can join with the link, after someone in the meeting lets them in. Off: only people with an account here."),
+      h("label", { class: "field" }, "Meeting links last (days)", h("input", { type: "number", name: "days", min: 1, max: 365, value: s.days, required: true })),
+    ], "Save", async (v) => {
+      await api("meet/settings", { method: "POST", body: { enabled: v.enabled === "on", guests: v.guests === "on", days: Number(v.days) } });
+      toast("Saved.");
+    }));
+}
+
+window.Webmail = { api, h, icon, toast, state, start, openMessage, refresh, openFolder, replyTo, popMenu, confirmPw, formFor, size, csrf: () => csrf, meetNow, meetingsDialog,
   openFiles: (opts = {}) => {
     state.folder = "files"; state.label = 0; state.query = ""; $search.value = "";
     $shell.classList.remove("menu", "reading"); renderFolders(); window.FilesUI?.show(opts);

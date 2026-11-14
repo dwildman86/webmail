@@ -3,6 +3,13 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.26.0
+- **Meetings**: video calls in the browser, with nothing to install. **Meet now** on an email starts one named after it and offers to reply with the link. **Meetings** in the side menu starts one or opens one again, and **Add video call** puts a meeting link in a calendar event.
+- Customers and others without an account join from the link: they give their name and wait until someone in the meeting lets them in. Administrators can stop guests joining in **Settings → Meetings**.
+- Mute (Ctrl+D), camera on and off (Ctrl+E), choose your camera and microphone, share your screen, raise your hand, and chat. Whoever's talking is outlined, and someone sharing their screen fills the stage. Whoever started the meeting can remove people and lock it.
+- **Record** a meeting: everyone sees that it's being recorded, and the recording is saved to your Files (Meeting recordings), encrypted.
+- **Private by design**: sound and video go directly between the people in the meeting, encrypted. The webmail only introduces their browsers to each other and deletes those details once they're used. When a direct connection isn't possible, GhostParse's relay carries the encrypted media. Up to 6 people per meeting.
+
 ## 1.25.0
 - **Presentations**: PowerPoint files (.pptx) open in an editor in the webmail, and Files → New makes one, blank or from a template (pitch, project update, team meeting). Add slides from layouts (title, title and content, section, two content), text boxes, shapes, lines and arrows, and pictures. Move, resize and rotate them by hand, with guides that snap to the slide's centre and to other things. Format text with fonts, sizes, colours, alignment and bulleted or numbered lists. Fill and outline shapes, put things in front or behind, flip them, set each slide's background, drag slides into order, hide slides, and write speaker notes.
 - **Present**: show the slides full screen, moving on with the arrow keys, the space bar or a click.
