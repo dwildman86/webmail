@@ -20,13 +20,23 @@
  *   { t: "replace", id, block }                     a picture or a whole table changed
  *   { t: "cell", id, r, c, blocks }                 one table cell's contents
  *   { t: "page", page } / { t: "hf", which: "header" | "footer", blocks }
+ *   { t: "track", on }                              track changes on or off, for everyone
+ *   { t: "note", id, note: { kind: "foot" | "end", blocks } | null }   a footnote's or endnote's text
+ *
+ * Tracked changes are marks on runs, like formatting: ins / del = "<ISO time>|<author>". A footnote or endnote reference
+ * is a one-character run (NOTE_CHAR) with fn = the note's id; its text is in doc.notes[id].
  */
 /** A link that's safe to show and follow: web, email and phone addresses, and places in the document. Null otherwise. */
 const safeHref = (href) => {
   const h = String(href ?? "").trim().replace(/[\u0000-\u001f\u007f\s]+/g, (m) => (m.trim() === "" && !/[\u0000-\u001f\u007f]/.test(m) ? "%20" : ""));
   return /^(https?:\/\/|mailto:|tel:|#)/i.test(h) && h.length <= 2000 ? h : null;
 };
-const RUN_KEYS = ["b", "i", "u", "s", "sup", "sub", "color", "bg", "font", "size", "href"];
+const RUN_KEYS = ["b", "i", "u", "s", "sup", "sub", "color", "bg", "font", "size", "href", "ins", "del", "fn"];
+const NOTE_CHAR = "\uFFFC";
+/** A tracked change's mark: when and who. */
+const stamp = (name, when = new Date()) => `${when.toISOString().slice(0, 16)}:00Z|${String(name || "Someone").replace(/[\u0000-\u001f|]/g, " ").slice(0, 120)}`;
+const author = (mark) => { const s = String(mark || ""); const i = s.indexOf("|"); return i < 0 ? s : s.slice(i + 1); };
+const when = (mark) => { const s = String(mark || ""); const i = s.indexOf("|"); return i < 0 ? "" : s.slice(0, i); };
 const len = (runs) => runs.reduce((n, r) => n + r.text.length, 0);
 const textOf = (b) => (b.runs || []).map((r) => r.text).join("");
 const props = (r) => { const p = {}; for (const k of RUN_KEYS) if (r[k] !== undefined && r[k] !== null && r[k] !== false) p[k] = r[k]; if (p.href !== undefined) { const h = safeHref(p.href); if (h) p.href = h; else delete p.href; } return p; };
@@ -59,7 +69,7 @@ function splice(runs, at, del, ins) {
   if (ins.length && ins.every((r) => !Object.keys(props(r)).length) && at > 0) {
     const before = slice(runs, at - 1, at)[0];
     const keep = before ? props(before) : {};
-    delete keep.href;
+    delete keep.href; delete keep.ins; delete keep.del; delete keep.fn;
     ins = ins.map((r) => ({ ...keep, ...r }));
   }
   return tidy([...slice(runs, 0, at), ...ins, ...slice(runs, at + del, n)]);
@@ -75,7 +85,7 @@ let seq = 0;
 const newId = () => "b" + Date.now().toString(36) + (seq++).toString(36) + Math.random().toString(36).slice(2, 7);
 const index = (doc, id) => doc.blocks.findIndex((b) => b.id === id);
 const copy = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
-const clone = (doc) => ({ ...doc, page: copy(doc.page), header: doc.header && doc.header.map((b) => ({ ...b, runs: b.runs?.map((r) => ({ ...r })) })), footer: doc.footer && doc.footer.map((b) => ({ ...b, runs: b.runs?.map((r) => ({ ...r })) })),
+const clone = (doc) => ({ ...doc, page: copy(doc.page), notes: doc.notes && copy(doc.notes), header: doc.header && doc.header.map((b) => ({ ...b, runs: b.runs?.map((r) => ({ ...r })) })), footer: doc.footer && doc.footer.map((b) => ({ ...b, runs: b.runs?.map((r) => ({ ...r })) })),
   blocks: doc.blocks.map((b) => (b.type === "p" ? { ...b, runs: b.runs.map((r) => ({ ...r })), list: b.list && { ...b.list } } : b)) });
 const P_KEYS = ["style", "align", "indent", "list"];
 
@@ -142,9 +152,72 @@ function apply(doc, op) {
     }
     case "page": doc.page = copy(op.page); return "all";
     case "hf": doc[op.which === "footer" ? "footer" : "header"] = op.blocks?.length ? copy(op.blocks) : null; return "all";
+    case "track": if (op.on) doc.track = true; else delete doc.track; return "all";
+    case "note": {
+      if (typeof op.id !== "string" || !op.id) return null;
+      const notes = { ...(doc.notes || {}) };
+      if (op.note) notes[op.id] = { kind: op.note.kind === "end" ? "end" : "foot", blocks: copy(op.note.blocks || []) }; else delete notes[op.id];
+      doc.notes = notes;
+      return "all";
+    }
   }
   return null;
 }
+
+/**
+ * Typing or deleting with track changes on: what the change $at/$del/$ins becomes. Deleted text stays, marked deleted
+ * (except your own tracked insertions, which simply go); what's typed is marked inserted. Returns the runs to put in
+ * place of [at, at + del) and how long the kept deleted text is (it comes first, as in Word).
+ */
+function tracked(runs, at, del, ins, name, now = new Date()) {
+  const mark = stamp(name, now);
+  const kept = [];
+  for (const r of slice(runs, at, at + del)) {
+    if (r.ins && !r.del && author(r.ins) === author(mark)) continue;
+    kept.push(r.del ? { ...r } : { ...r, del: mark });
+  }
+  const added = (ins || []).map((r) => { const x = { ...r, ins: mark }; delete x.del; return x; }).filter((r) => r.text);
+  return { runs: tidy([...kept, ...added]), keptLen: len(kept), mark };
+}
+/** Runs with the tracked changes in [from, to) accepted or rejected; $which(kind, mark) picks which (all, if not given). */
+function resolve(runs, from, to, accept, which = () => true) {
+  const n = len(runs);
+  from = Math.max(0, Math.min(from, n)); to = Math.max(from, Math.min(to, n));
+  const mid = [];
+  for (const r of slice(runs, from, to)) {
+    let x = { ...r };
+    if (x.del && which("del", x.del)) { if (accept) continue; delete x.del; }
+    if (x.ins && which("ins", x.ins)) { if (!accept) continue; delete x.ins; }
+    mid.push(x);
+  }
+  return tidy([...slice(runs, 0, from), ...mid, ...slice(runs, to, n)]);
+}
+/** The tracked changes in a paragraph: [{ from, to, kind: "ins" | "del", mark }] (neighbouring runs with the same mark joined). */
+function changes(runs) {
+  const out = [];
+  let pos = 0;
+  for (const r of runs) {
+    const end = pos + r.text.length;
+    for (const kind of ["del", "ins"]) {
+      if (!r[kind]) continue;
+      const last = out[out.length - 1];
+      if (last && last.kind === kind && last.mark === r[kind] && last.to === pos) last.to = end;
+      else out.push({ from: pos, to: end, kind, mark: r[kind] });
+    }
+    pos = end;
+  }
+  return out.sort((a, b) => a.from - b.from || (a.kind === "del" ? -1 : 1));
+}
+/** Footnotes and endnotes in the order they're referred to: [{ id, kind, n }] (n: 1, 2, 3… for each kind). */
+function noteOrder(doc) {
+  const out = [], seen = new Set(), count = { foot: 0, end: 0 };
+  const visit = (blocks) => { for (const b of blocks || []) { if (b.type === "p") { for (const r of b.runs) if (r.fn && !seen.has(r.fn) && doc.notes?.[r.fn]) { seen.add(r.fn); const kind = doc.notes[r.fn].kind; out.push({ id: r.fn, kind, n: ++count[kind] }); } } else if (b.type === "table") for (const row of b.rows) for (const c of row.cells) visit(c.blocks); } };
+  visit(doc.blocks);
+  return out;
+}
+const roman = (n) => { let s = ""; for (const [v, r] of [[1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"], [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]]) while (n >= v) { s += r; n -= v; } return s; };
+/** How a note's number is shown: 1, 2, 3 for footnotes; i, ii, iii for endnotes (as Word does). */
+const noteLabel = (kind, n) => (kind === "end" ? roman(n) : String(n));
 
 /** Where position $p ends up after $a (a text change in the same paragraph). $end: the end of a range, which stays before typed text. */
 function mapPos(p, a, end = false) {
@@ -182,7 +255,7 @@ function past(o, a) {
       if (gone(o.id)) return null;
       if (o.t === "cell" && a.t === "replace" && a.id === o.id) return null; // the table was rebuilt
       return o;
-    case "page": case "hf":
+    case "page": case "hf": case "track": case "note":
       return o;
     case "para":
       if (a.t === "delete" && a.id === o.id) return null;
@@ -258,9 +331,12 @@ function inverse(doc, op) {
     case "cell": { const cell = b?.rows?.[op.r]?.cells?.[op.c]; return cell && { t: "cell", id: op.id, r: op.r, c: op.c, blocks: copy(cell.blocks) }; }
     case "page": return { t: "page", page: copy(doc.page) };
     case "hf": return { t: "hf", which: op.which, blocks: copy(doc[op.which === "footer" ? "footer" : "header"]) || [] };
+    case "track": return { t: "track", on: !!doc.track };
+    case "note": return { t: "note", id: op.id, note: copy(doc.notes?.[op.id]) ?? null };
   }
   return null;
 }
 
-return { apply, rebase, inverse, clone, newId, len, textOf, slice, splice, format, tidy, props, same, safeHref, RUN_KEYS, P_KEYS };
+return { apply, rebase, inverse, clone, newId, len, textOf, slice, splice, format, tidy, props, same, safeHref, RUN_KEYS, P_KEYS,
+  NOTE_CHAR, stamp, author, when, tracked, resolve, changes, noteOrder, noteLabel };
 });

@@ -223,6 +223,20 @@ body.ox-open .overlay { z-index: 70; }
 .ox-tgrid { display: grid; grid-template-columns: repeat(8, 20px); gap: 3px; margin-top: 6px; }
 .ox-tcell { width: 20px; height: 20px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--panel); cursor: pointer; padding: 0; }
 .ox-tcell.on { background: var(--accent-soft); border-color: var(--accent); }
+.ox-ins { color: var(--who, #b45309); text-decoration: underline; text-decoration-color: var(--who, #b45309); }
+.ox-del { color: var(--who, #b45309); text-decoration: line-through; text-decoration-color: var(--who, #b45309); }
+.ox-fnref { font-size: 0; cursor: pointer; }
+.ox-fnref::after { content: attr(data-n); font-size: 10px; font-weight: 600; vertical-align: super; color: var(--accent); padding: 0 1px; }
+.ox-fnref.ox-del::after { text-decoration: line-through; color: var(--who); }
+.ox-fnref.ox-flash::after { background: #fde68a; border-radius: 3px; }
+.ox-notes { margin-top: 28px; padding-top: 10px; border-top: 1px solid #c8cdd5; font-size: 9.5pt; }
+.ox-notes-title { margin: 10px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: #6b7280; }
+.ox-note { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+.ox-note-n { flex: none; min-width: 18px; padding: 0 2px; border: 0; background: none; color: var(--accent); font: 600 10px/1.8 inherit; vertical-align: super; cursor: pointer; text-align: right; }
+.ox-note-body { flex: 1; min-width: 0; outline: none; border-radius: 4px; white-space: pre-wrap; }
+.ox-note-body > * { margin: 0 0 3px; }
+.ox-note-body:focus { box-shadow: 0 0 0 1px #d6dbe3; }
+.ox-menu-note { padding: 6px 12px 8px; font-size: 12.5px; color: var(--muted); }
 .ox-hf { min-height: 18px; color: #555; font-size: 9pt; outline: none; white-space: pre-wrap; border-radius: 4px; }
 .ox-hf > * { margin: 0; }
 .ox-header { position: absolute; left: var(--m-l, 94px); right: var(--m-r, 94px); top: 28px; }

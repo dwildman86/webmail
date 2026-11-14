@@ -63,6 +63,9 @@ const PATHS = {
   chart: "M4 20h16 M7 16v-4 M12 16V7 M17 16v-7",
   pivot: "M4 4h16v16H4z M4 9h16 M9 4v16 M13 13h4 M15 11l2 2-2 2",
   condFormat: "M4 4h16v16H4z M4 12h16 M12 4v16 M14.5 14.5h3v3h-3z",
+  track: "M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4 M13 20h7",
+  review: "M4 6h10 M4 10h10 M4 14h6 M14 17l2.5 2.5L21 15",
+  footnote: "M4 6h12 M4 10h12 M4 14h7 M17 15h3v6 M16 21h5 M4 19h7",
 };
 const icon = (name) => h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
   h("path", { d: PATHS[name] || "" }));

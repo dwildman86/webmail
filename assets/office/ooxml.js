@@ -700,6 +700,10 @@ const newId = () => "b" + Date.now().toString(36) + (idSeq++).toString(36) + Mat
 const STYLE_FROM = { title: "title", subtitle: "h2", "heading 1": "h1", "heading 2": "h2", "heading 3": "h3", "heading 4": "h4", "heading 5": "h4", "heading 6": "h4", quote: "quote", "intense quote": "quote", "html preformatted": "code" };
 const TWIP_MM = 1440 / 25.4;
 
+const NOTE_CHAR = "\uFFFC";
+/** A Word revision's author and time as a run's tracked-change mark ("<ISO time>|<author>"). */
+const trackMark = (el) => `${(attr(el, "date") || "").replace(/\.\d+Z$/, "Z")}|${String(attr(el, "author") || "Someone").replace(/[\u0000-\u001f|]/g, " ").slice(0, 120)}`;
+
 async function readDocx(bytes) {
   const files = await unzip(bytes);
   // Ids worked out from the file itself, so everyone who opens it gets the same ones.
@@ -748,7 +752,6 @@ async function readDocx(bytes) {
     if (numPr) { const numId = attr(kid(numPr, "numId"), "val"); const lvl = +(attr(kid(numPr, "ilvl"), "val") || 0); if (numId && numId !== "0") block.list = { kind: (numbering[numId]?.[lvl] || "bullet") === "bullet" ? "bullet" : "number", level: lvl }; }
     const ind = attr(kid(pPr, "ind"), "left") || attr(kid(pPr, "ind"), "start");
     if (ind && !block.list && +ind >= 360) block.indent = Math.min(8, Math.round(+ind / 720));
-    if (kid(pPr, "rPr") && kid(kid(pPr, "rPr"), "ins")) unsupported.add("tracked changes");
     const pushRuns = (el, base = {}) => {
       for (const c of el.children || []) {
         if (!c.name) continue;
@@ -757,17 +760,17 @@ async function readDocx(bytes) {
           const props = runProps(kid(c, "rPr"), base);
           for (const x of c.children || []) {
             const xn = local(x.name || "");
-            if (xn === "t") block.runs.push({ text: textOf(x), ...props });
+            if (xn === "t" || xn === "delText") block.runs.push({ text: textOf(x), ...props });
             else if (xn === "tab") block.runs.push({ text: "\t", ...props });
             else if (xn === "br") { if (attr(x, "type") === "page") { finish(); out.push({ id: newId(), type: "pagebreak" }); } else block.runs.push({ text: "\n", ...props }); }
             else if (xn === "drawing") { const blip = deep(x, "blip")[0]; const ext = deep(x, "extent")[0]; const pr = deep(x, "docPr")[0]; const src = blip && media(attr(blip, "embed")); if (deep(x, "anchor").length) unsupported.add("pictures placed around text"); if (src) { finish(); out.push({ id: newId(), type: "img", src, w: ext ? Math.round(+ext.attrs.cx / 9525) : 300, h: ext ? Math.round(+ext.attrs.cy / 9525) : 200, ...(pr?.attrs.descr ? { alt: pr.attrs.descr } : {}), align: block.align }); } }
             else if (xn === "fldChar" || xn === "instrText") unsupported.add("fields (page numbers, contents lists)");
-            else if (xn === "footnoteReference" || xn === "endnoteReference") unsupported.add("footnotes");
+            else if (xn === "footnoteReference" || xn === "endnoteReference") { const id = attr(x, "id"); const { sup, sub, ...p2 } = props; void sup; void sub; if (id !== undefined) block.runs.push({ text: NOTE_CHAR, ...p2, fn: (xn === "footnoteReference" ? "f" : "e") + id }); }
             else if (xn === "AlternateContent" || xn === "pict" || xn === "object") unsupported.add("shapes, text boxes and objects");
           }
         } else if (n === "hyperlink") { const href = safeHref(rels[attr(c, "id")]?.target); pushRuns(c, href ? { ...base, href } : base); }
-        else if (n === "ins") { unsupported.add("tracked changes"); pushRuns(c, base); }
-        else if (n === "del" || n === "moveFrom") unsupported.add("tracked changes");
+        else if (n === "ins" || n === "moveTo") pushRuns(c, { ...base, ins: trackMark(c) });
+        else if (n === "del" || n === "moveFrom") pushRuns(c, { ...base, del: trackMark(c) });
         else if (n === "smartTag" || n === "sdt" || n === "customXml" || n === "fldSimple") { if (n === "fldSimple") unsupported.add("fields (page numbers, contents lists)"); pushRuns(n === "sdt" ? kid(c, "sdtContent") || c : c, base); }
         else if (n === "commentRangeStart" || n === "commentReference") unsupported.add("Word comments");
       }
@@ -807,7 +810,22 @@ async function readDocx(bytes) {
     var header = part("headerReference"), footer = part("footerReference");
   }
   if (files["word/comments.xml"]) unsupported.add("Word comments");
-  if (files["word/footnotes.xml"] && deep(parseXml(files["word/footnotes.xml"]), "footnote").length > 2) unsupported.add("footnotes");
+  // Tracked changes to formatting and table structure aren't kept (typed and deleted text is).
+  if (["rPrChange", "pPrChange", "sectPrChange", "tblPrChange", "trPrChange", "tcPrChange", "numberingChange"].some((n) => deep(doc, n).length)) unsupported.add("tracked formatting changes");
+  if (["cellIns", "cellDel", "cellMerge"].some((n) => deep(doc, n).length)) unsupported.add("tracked changes to tables");
+  // Footnotes and endnotes.
+  const notes = {};
+  for (const [kind, part, tag, pre] of [["foot", "word/footnotes.xml", "footnote", "f"], ["end", "word/endnotes.xml", "endnote", "e"]]) {
+    if (!files[part]) continue;
+    for (const fn of kids(parseXml(files[part]), tag)) {
+      if (["separator", "continuationSeparator", "continuationNotice"].includes(attr(fn, "type"))) continue;
+      const blocks = body(fn).filter((x) => x.type === "p");
+      if (blocks[0]?.runs[0]) { const r0 = blocks[0].runs[0]; r0.text = r0.text.replace(/^ /, ""); if (!r0.text) blocks[0].runs.shift(); }
+      notes[pre + attr(fn, "id")] = { kind, blocks: blocks.length ? blocks : [{ id: newId(), type: "p", runs: [] }] };
+    }
+  }
+  const settings = files["word/settings.xml"] ? parseXml(files["word/settings.xml"]) : null;
+  const track = !!(settings && kid(settings, "trackRevisions") && !["0", "false"].includes(attr(kid(settings, "trackRevisions"), "val")));
   if (!blocks.length) blocks.push({ id: newId(), type: "p", runs: [] });
   // Saved by the editors: their ids for each block ("~" marks the empty paragraph Word needs after a table, not one of theirs).
   const ids = (readCustom(files).WebmailBlockIds || "").split(" ").filter(Boolean);
@@ -819,7 +837,20 @@ async function readDocx(bytes) {
     if (!out.length) out = [{ id: newId(), type: "p", runs: [] }];
   }
   if (out[out.length - 1].type !== "p") out.push({ id: newId(), type: "p", runs: [] });
-  return { doc: { page, blocks: out, header: header || null, footer: footer || null }, unsupported: [...unsupported] };
+  // The editors' own note ids, if they saved it (as for paragraphs).
+  const noteMap = Object.fromEntries((readCustom(files).WebmailNoteIds || "").split(" ").filter((x) => /^[fe]\d+=\S+$/.test(x)).map((x) => x.split("=")));
+  if (Object.keys(noteMap).length) {
+    for (const k of Object.keys(notes)) if (noteMap[k] && !notes[noteMap[k]]) { notes[noteMap[k]] = notes[k]; delete notes[k]; }
+    const remap = (bs) => { for (const x of bs || []) { if (x.type === "p") x.runs = x.runs.map((r) => (r.fn && noteMap[r.fn] ? { ...r, fn: noteMap[r.fn] } : r)); else if (x.type === "table") for (const row of x.rows) for (const c of row.cells) remap(c.blocks); } };
+    remap(out);
+  }
+  // Only notes something refers to.
+  const used = new Set();
+  const walk = (bs) => { for (const x of bs || []) { if (x.type === "p") for (const r of x.runs) { if (r.fn) used.add(r.fn); } else if (x.type === "table") for (const row of x.rows) for (const c of row.cells) walk(c.blocks); } };
+  walk(out);
+  const kept = Object.fromEntries(Object.entries(notes).filter(([id]) => used.has(id)));
+  for (const x of out) if (x.type === "p" && x.runs.some((r) => r.fn && !kept[r.fn])) x.runs = x.runs.filter((r) => !r.fn || kept[r.fn]);
+  return { doc: { page, blocks: out, header: header || null, footer: footer || null, ...(Object.keys(kept).length ? { notes: kept } : {}), ...(track ? { track: true } : {}) }, unsupported: [...unsupported] };
 }
 /** Neighbouring runs with the same formatting joined. */
 function merge(runs) {
@@ -843,15 +874,32 @@ async function writeDocx(doc) {
   const rel = (type, target, external = false) => { const id = "rId" + (rels.length + 10); rels.push([id, type, target, external]); return id; };
   const lists = []; // numbering instances: { kind }
   let currentList = null;
+  let revId = 0;
+  const noteIds = new Map(); // note id → its number in footnotes.xml / endnotes.xml
+  const noteNum = (id) => { if (!noteIds.has(id)) noteIds.set(id, (doc.notes?.[id]?.kind === "end" ? [...noteIds.keys()].filter((k) => doc.notes[k]?.kind === "end") : [...noteIds.keys()].filter((k) => doc.notes?.[k]?.kind !== "end")).length + 1); return noteIds.get(id); };
+  const revAttrs = (mark) => { const s = String(mark || ""); const i = s.indexOf("|"); const date = i < 0 ? "" : s.slice(0, i), who = i < 0 ? s : s.slice(i + 1); return ` w:id="${++revId}" w:author="${esc(who || "Someone")}"${/^\d{4}-\d\d-\d\dT/.test(date) ? ` w:date="${esc(date)}"` : ""}`; };
   const runXml = (r) => {
+    if (r.fn && doc.notes?.[r.fn]) {
+      const end = doc.notes[r.fn].kind === "end";
+      return tracked(`<w:r><w:rPr><w:rStyle w:val="${end ? "EndnoteReference" : "FootnoteReference"}"/></w:rPr><w:${end ? "endnote" : "footnote"}Reference w:id="${noteNum(r.fn)}"/></w:r>`, r);
+    }
+    if (r.fn) return "";
     const pr = [safeHref(r.href) ? '<w:rStyle w:val="Hyperlink"/>' : "", r.font ? `<w:rFonts w:ascii="${esc(r.font)}" w:hAnsi="${esc(r.font)}" w:cs="${esc(r.font)}"/>` : "", r.b ? "<w:b/>" : "", r.i ? "<w:i/>" : "", r.s ? "<w:strike/>" : "",
       r.color ? `<w:color w:val="${hex(r.color)}"/>` : "", r.size ? `<w:sz w:val="${Math.round(r.size * 2)}"/><w:szCs w:val="${Math.round(r.size * 2)}"/>` : "",
       r.u ? '<w:u w:val="single"/>' : "", r.bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${hex(r.bg)}"/>` : "", r.sup ? '<w:vertAlign w:val="superscript"/>' : r.sub ? '<w:vertAlign w:val="subscript"/>' : ""].join("");
-    const parts = r.text.split(/(\t|\n)/).map((t) => (t === "\t" ? "<w:tab/>" : t === "\n" ? "<w:br/>" : t ? `<w:t xml:space="preserve">${esc(t)}</w:t>` : "")).join("");
-    const run = `<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ""}${parts}</w:r>`;
+    const tag = r.del ? "w:delText" : "w:t";
+    const parts = r.text.split(/(\t|\n)/).map((t) => (t === "\t" ? "<w:tab/>" : t === "\n" ? "<w:br/>" : t ? `<${tag} xml:space="preserve">${esc(t)}</${tag}>` : "")).join("");
+    const run = tracked(`<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ""}${parts}</w:r>`, r);
     const href = safeHref(r.href);
     return href ? `<w:hyperlink r:id="${rel("hyperlink", href, true)}">${run}</w:hyperlink>` : run;
   };
+  /** A run inside its tracked-change marks (inserted, deleted, or inserted then deleted). */
+  function tracked(run, r) {
+    let x = run;
+    if (r.del) x = `<w:del${revAttrs(r.del)}>${x}</w:del>`;
+    if (r.ins) x = `<w:ins${revAttrs(r.ins)}>${x}</w:ins>`;
+    return x;
+  }
   const para = (b) => {
     if (b.list) { if (!currentList || currentList.kind !== b.list.kind) { currentList = { kind: b.list.kind }; lists.push(currentList); } }
     else currentList = null;
@@ -902,6 +950,24 @@ async function writeDocx(doc) {
   const files = {};
   const hf = (kind, blocks) => { if (!blocks?.length) return ""; const name = `${kind}1.xml`; currentList = null; files[`word/${name}`] = XML_HEAD + `<w:${kind === "header" ? "hdr" : "ftr"} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${blocks.map((b) => block(b, avail)).join("")}</w:${kind === "header" ? "hdr" : "ftr"}>`; return `<w:${kind}Reference w:type="default" r:id="${rel(kind, name)}"/>`; };
   const hdr = hf("header", doc.header), ftr = hf("footer", doc.footer);
+  // Footnotes and endnotes, numbered in the order the text refers to them (as Word does).
+  const notesXml = (kind) => {
+    const tag = kind === "end" ? "endnote" : "footnote", style = kind === "end" ? "Endnote" : "Footnote";
+    const list = [...noteIds.entries()].filter(([id]) => (doc.notes[id].kind === "end") === (kind === "end"));
+    if (!list.length) return null;
+    const sep = `<w:${tag} w:type="separator" w:id="-1"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:separator/></w:r></w:p></w:${tag}><w:${tag} w:type="continuationSeparator" w:id="0"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:continuationSeparator/></w:r></w:p></w:${tag}>`;
+    const one = ([id, n]) => {
+      const blocks = (doc.notes[id].blocks || []).filter((x) => x.type === "p");
+      const paras = (blocks.length ? blocks : [{ runs: [] }]).map((x, i) => `<w:p><w:pPr><w:pStyle w:val="${style}Text"/></w:pPr>${i === 0 ? `<w:r><w:rPr><w:rStyle w:val="${style}Reference"/></w:rPr><w:${tag}Ref/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>` : ""}${(x.runs || []).filter((r) => !r.fn).map(runXml).join("")}</w:p>`).join("");
+      return `<w:${tag} w:id="${n}">${paras}</w:${tag}>`;
+    };
+    return XML_HEAD + `<w:${tag}s xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${sep}${list.map(one).join("")}</w:${tag}s>`;
+  };
+  const foot = doc.notes ? notesXml("foot") : null, endn = doc.notes ? notesXml("end") : null;
+  if (foot) { files["word/footnotes.xml"] = foot; rel("footnotes", "footnotes.xml"); }
+  if (endn) { files["word/endnotes.xml"] = endn; rel("endnotes", "endnotes.xml"); }
+  files["word/settings.xml"] = XML_HEAD + `<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${doc.track ? "<w:trackRevisions/>" : ""}<w:defaultTabStop w:val="720"/>${foot ? '<w:footnotePr><w:footnote w:id="-1"/><w:footnote w:id="0"/></w:footnotePr>' : ""}${endn ? '<w:endnotePr><w:endnote w:id="-1"/><w:endnote w:id="0"/></w:endnotePr>' : ""}<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`;
+  rel("settings", "settings.xml");
   const sect = `<w:sectPr>${hdr}${ftr}<w:pgSz w:w="${pw}" w:h="${ph}"${page.landscape ? ' w:orient="landscape"' : ""}/><w:pgMar w:top="${Math.round(m.t * TWIP_MM)}" w:right="${Math.round(m.r * TWIP_MM)}" w:bottom="${Math.round(m.b * TWIP_MM)}" w:left="${Math.round(m.l * TWIP_MM)}" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr>`;
   files["word/document.xml"] = XML_HEAD + `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><w:body>${body}${sect}</w:body></w:document>`;
   const bullets = ["•", "◦", "▪", "•", "◦", "▪", "•", "◦", "▪"];
@@ -909,14 +975,14 @@ async function writeDocx(doc) {
   const lvls = (kind) => Array.from({ length: 9 }, (_, i) => `<w:lvl w:ilvl="${i}"><w:start w:val="1"/><w:numFmt w:val="${kind === "bullet" ? "bullet" : numFmts[i]}"/><w:lvlText w:val="${kind === "bullet" ? bullets[i] : `%${i + 1}.`}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="${720 * (i + 1)}" w:hanging="360"/></w:pPr>${kind === "bullet" ? '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/></w:rPr>' : ""}</w:lvl>`).join("");
   files["word/numbering.xml"] = XML_HEAD + `<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:multiLevelType w:val="hybridMultilevel"/>${lvls("bullet")}</w:abstractNum><w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${lvls("number")}</w:abstractNum>${lists.map((l, i) => `<w:num w:numId="${i + 1}"><w:abstractNumId w:val="${l.kind === "bullet" ? 0 : 1}"/>${l.kind === "number" ? `<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride>` : ""}</w:num>`).join("")}</w:numbering>`;
   const heading = (id, name, size, extra = "") => `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="9"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="${+id.slice(-1) - 1 || 0}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${size}"/>${extra}</w:rPr></w:style>`;
-  files["word/styles.xml"] = XML_HEAD + `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="120"/></w:pPr><w:rPr><w:sz w:val="56"/></w:rPr></w:style>${heading("Heading1", "heading 1", 36)}${heading("Heading2", "heading 2", 30)}${heading("Heading3", "heading 3", 26)}${heading("Heading4", "heading 4", 22, "<w:i/>")}<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:ind w:left="720" w:right="720"/></w:pPr><w:rPr><w:i/><w:color w:val="404040"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Code"><w:name w:val="HTML Preformatted"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="40"/><w:contextualSpacing/></w:pPr></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`;
+  files["word/styles.xml"] = XML_HEAD + `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="120"/></w:pPr><w:rPr><w:sz w:val="56"/></w:rPr></w:style>${heading("Heading1", "heading 1", 36)}${heading("Heading2", "heading 2", 30)}${heading("Heading3", "heading 3", 26)}${heading("Heading4", "heading 4", 22, "<w:i/>")}<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:ind w:left="720" w:right="720"/></w:pPr><w:rPr><w:i/><w:color w:val="404040"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Code"><w:name w:val="HTML Preformatted"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="20"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="40"/><w:contextualSpacing/></w:pPr></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>${["Footnote", "Endnote"].map((n) => `<w:style w:type="paragraph" w:styleId="${n}Text"><w:name w:val="${n.toLowerCase()} text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr></w:style><w:style w:type="character" w:styleId="${n}Reference"><w:name w:val="${n.toLowerCase()} reference"/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>`).join("")}<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>`;
   files["word/_rels/document.xml.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>${rels.map(([id, type, target, ext]) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${esc(target)}"${ext ? ' TargetMode="External"' : ""}/>`).join("")}</Relationships>`;
   files["_rels/.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>${CUSTOM_REL}</Relationships>`;
   files["docProps/core.xml"] = coreXml();
-  files["docProps/custom.xml"] = customXml({ WebmailBlockIds: ids.map((x) => String(x).replace(/\s/g, "")).join(" ") });
+  files["docProps/custom.xml"] = customXml({ WebmailBlockIds: ids.map((x) => String(x).replace(/\s/g, "")).join(" "), ...(noteIds.size ? { WebmailNoteIds: [...noteIds].map(([id, n]) => `${doc.notes[id].kind === "end" ? "e" : "f"}${n}=${String(id).replace(/[\s=]/g, "")}`).join(" ") } : {}) });
   const exts = [...new Set(Object.keys(media).map((n) => n.split(".").pop()))];
   const MIME = { png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp" };
-  files["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${exts.map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join("")}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${files["word/header1.xml"] ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : ""}${files["word/footer1.xml"] ? '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>${CUSTOM_TYPE}</Types>`;
+  files["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${exts.map((e) => `<Default Extension="${e}" ContentType="${MIME[e]}"/>`).join("")}<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>${files["word/header1.xml"] ? '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>' : ""}${files["word/footer1.xml"] ? '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' : ""}${files["word/footnotes.xml"] ? '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>' : ""}${files["word/endnotes.xml"] ? '<Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>' : ""}<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>${CUSTOM_TYPE}</Types>`;
   return zip({ ...files, ...media });
 }
 

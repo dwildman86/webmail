@@ -3,6 +3,11 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.24.0
+- **Track changes** in documents: turn it on (Ctrl+Shift+E) and everyone's edits are marked, each person in their own colour, with who made each change and when. Deleted text stays, struck through, until someone accepts or rejects it. Go from change to change, and accept or reject one change, a selection or everything at once. Tracked changes open and save with Word files, so Word shows them too.
+- **Footnotes and endnotes**: add one where the cursor is (Ctrl+Alt+F or Ctrl+Alt+D) and type its text at the foot of the document. They're numbered as you go, and saved as real Word footnotes and endnotes.
+- Word files with tracked changes or footnotes now open to edit, rather than view-only. Tracked changes to formatting and to tables still open view-only, with Edit a copy.
+
 ## 1.23.0
 - **Conditional formatting** in spreadsheets: highlight cells greater than, less than, between or equal to a value, text that contains something, dates (this week, last month and so on), duplicates, the top or bottom 10, or above or below average, or use a formula of your own. Data bars, colour scales and icons too. Change each rule's cells and order in Manage rules. Rules open and save with Excel files.
 - **Charts**: column, bar, line, area, pie, doughnut and scatter, made from the selected cells in one click. Stack them, give them a title, choose the legend and show values. Drag to move and resize. They follow the numbers as they change, and they're real Excel charts in the saved file. Charts in Excel files you open can be edited too.

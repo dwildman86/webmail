@@ -26,8 +26,31 @@ const hex = (c) => {
 
 // ---------------------------------------------------------------------------------------------- drawing blocks
 
+/** Each person's tracked changes in their own colour. */
+const WHO = ["#b45309", "#1d4ed8", "#be185d", "#047857", "#7c3aed", "#c2410c", "#0e7490", "#a21caf"];
+const whoColor = (name) => { let x = 0; for (const ch of String(name || "")) x = (x * 31 + ch.codePointAt(0)) >>> 0; return WHO[x % WHO.length]; };
+const whenText = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString([], { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }); };
+function markChange(s, r) {
+  if (!r.ins && !r.del) return;
+  if (r.ins) { s.dataset.ins = r.ins; s.classList.add("ox-ins"); }
+  if (r.del) { s.dataset.del = r.del; s.classList.add("ox-del"); }
+  const m = r.del || r.ins;
+  s.style.setProperty("--who", whoColor(D().author(m)));
+  s.title = [r.ins && `Inserted by ${D().author(r.ins)}${whenText(D().when(r.ins)) ? ", " + whenText(D().when(r.ins)) : ""}`, r.del && `Deleted by ${D().author(r.del)}${whenText(D().when(r.del)) ? ", " + whenText(D().when(r.del)) : ""}`].filter(Boolean).join("; ");
+}
 function renderRuns(el, runs) {
   for (const r of runs) {
+    if (r.fn) {
+      // A footnote or endnote reference: one character, its number drawn by CSS (data-n), not editable inside.
+      const s = document.createElement("span");
+      s.className = "ox-fnref";
+      s.contentEditable = "false";
+      s.dataset.fn = r.fn;
+      markChange(s, r);
+      s.textContent = D().NOTE_CHAR;
+      el.append(s);
+      continue;
+    }
     const parts = r.text.split("\n");
     const props = D().props(r); // links only to web, email and phone addresses (whatever a file or a collaborator sent)
     const plain = !Object.keys(props).length;
@@ -37,6 +60,7 @@ function renderRuns(el, runs) {
       if (plain) { el.append(t); return; }
       const s = document.createElement(props.href ? "a" : "span");
       if (props.href) { s.href = props.href; s.target = "_blank"; s.rel = "noopener noreferrer"; s.className = "ox-link"; }
+      markChange(s, r);
       if (r.b) s.style.fontWeight = "700";
       if (r.i) s.style.fontStyle = "italic";
       if (r.u || r.s) s.style.textDecorationLine = [r.u && "underline", r.s && "line-through"].filter(Boolean).join(" ");
@@ -121,6 +145,9 @@ function fmtOf(el, base) {
   if (t === "SUP") f.sup = true;
   if (t === "SUB") f.sub = true;
   if (t === "A" && D().safeHref(el.getAttribute("href"))) f.href = D().safeHref(el.getAttribute("href"));
+  // Tracked changes (drawn by class, so their look isn't read back as formatting).
+  if (el.dataset?.ins) f.ins = el.dataset.ins;
+  if (el.dataset?.del) f.del = el.dataset.del;
   if (t === "FONT") { if (el.getAttribute("color")) f.color = hex(el.getAttribute("color")); if (el.getAttribute("face")) f.font = el.getAttribute("face").split(",")[0].replace(/["']/g, "").trim(); }
   const st = el.style;
   if (st) {
@@ -151,6 +178,7 @@ function readRuns(el) {
       else if (ch.nodeType === 1) {
         if (ch.tagName === "BR") { if (ch !== last) runs.push({ text: "\n", ...fmt }); continue; }
         if (ch.classList?.contains("ox-ui")) continue;
+        if (ch.dataset?.fn) { const { sup, sub, ...f2 } = fmtOf(ch, fmt); void sup; void sub; runs.push({ ...f2, text: D().NOTE_CHAR, fn: ch.dataset.fn }); continue; }
         walk(ch, fmtOf(ch, fmt));
         if (BLOCK_TAGS.has(ch.tagName) && ch.nextSibling) runs.push({ text: "\n", ...fmt });
       }
@@ -243,7 +271,8 @@ function mount(host, ctx) {
   const $footer = h("div", { class: "ox-hf ox-footer", "data-placeholder": "Footer" });
   const $marks = h("div", { class: "ox-pagemarks ox-ui", "aria-hidden": "true" });
   const $cursors = h("div", { class: "ox-cursors ox-ui", "aria-hidden": "true" });
-  const $page = h("div", { class: "ox-page" }, $header, $root, $footer, $marks, $cursors);
+  const $notes = h("div", { class: "ox-notes", hidden: true });
+  const $page = h("div", { class: "ox-page" }, $header, $root, $notes, $footer, $marks, $cursors);
   const $words = h("span", { class: "ox-words" });
   const $scroller = h("div", { class: "ox-paper" }, $page);
   host.append(h("div", { class: "ox-docwrap" }, $scroller, h("div", { class: "ox-foot doc" }, $words)));
@@ -273,7 +302,7 @@ function mount(host, ctx) {
     }
   }
   /** Brings the page in line with the model: only blocks that changed are drawn again; the cursor stays put. */
-  function sync(caretHint = null) {
+  function sync(caretHint = null, exact = false) {
     const saved = caretHint || saveSel();
     const hadFocus = $root.contains(document.activeElement);
     const blocks = doc().blocks;
@@ -301,8 +330,8 @@ function mount(host, ctx) {
       prev = el;
     }
     if (saved) {
-      // The cursor moves along with other people's typing before it in the same paragraph.
-      for (const k of ["a", "f"]) {
+      // The cursor moves along with other people's typing before it in the same paragraph ($exact: it's already where it goes).
+      if (!exact) for (const k of ["a", "f"]) {
         const pnt = saved[k];
         if (!pnt || !changedText.has(pnt.id)) continue;
         const oldT = changedText.get(pnt.id), newT = D().textOf(doc().blocks.find((b) => b.id === pnt.id) || { runs: [] });
@@ -315,13 +344,14 @@ function mount(host, ctx) {
     observer.takeRecords();
     dirty.clear();
     drawPage();
+    drawNotes();
     words();
     requestAnimationFrame(() => { pageMarks(); drawCursors(); commentMarks(); });
   }
   function words() {
     const text = doc().blocks.map((b) => (b.type === "p" ? D().textOf(b) : b.type === "table" ? b.rows.flatMap((r) => r.cells.flatMap((c) => c.blocks.map(D().textOf))).join(" ") : "")).join(" ");
     const n = (text.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) || []).length;
-    $words.textContent = `${n.toLocaleString()} word${n === 1 ? "" : "s"}`;
+    $words.textContent = `${n.toLocaleString()} word${n === 1 ? "" : "s"}${doc().track ? " · Tracking changes" : ""}`;
   }
   /** Where pages end, roughly (the printout decides exactly): a dashed line every page's height of text. */
   function pageMarks() {
@@ -445,6 +475,17 @@ function mount(host, ctx) {
     const work = D().clone(model);
     const ops = [];
     const push = (op) => { const r = D().apply(work, op); if (r !== null) ops.push(op); };
+    // Track changes: deleted text stays (marked), typing is marked as yours. Off: typing inside someone's marked text is plain.
+    let shift = null;
+    const tracking = (op, runs) => {
+      if (op.t !== "text") return op;
+      const oldText = D().textOf({ runs: D().slice(runs, op.at, op.at + (op.del || 0)) }), newText = D().textOf({ runs: op.ins || [] });
+      if (oldText === newText) return op; // only formatting changed
+      if (!model.track) return { ...op, ins: (op.ins || []).map((r) => { const x = { ...r }; if (!r.fn) { delete x.ins; delete x.del; } return x; }) };
+      const t = D().tracked(runs, op.at, op.del || 0, op.ins || [], ctx.me?.name);
+      if (t.keptLen || (op.ins || []).length) shift = { id: op.id, at: op.at, keep: t.keptLen };
+      return { ...op, ins: t.runs };
+    };
     const elOf = (id) => els.find((e) => e.dataset.id === id);
     const domText = (el) => readRuns(el).map((r) => r.text).join("");
     // Blocks gone from the page: joined into the paragraph before (Backspace at a start), or deleted.
@@ -483,7 +524,7 @@ function mount(host, ctx) {
       if (!b) continue;
       if (b.type === "p" && el.dataset.type === "p") {
         const nb = readPara(el);
-        for (const op of textOps(id, b.runs, nb.runs)) push(op);
+        for (const op of textOps(id, b.runs, nb.runs)) push(tracking(op, b.runs));
         for (const op of paraOps(id, b, nb)) push(op);
       } else if (b.type === "table") {
         el.querySelectorAll(".ox-cellbody").forEach((body) => {
@@ -503,12 +544,14 @@ function mount(host, ctx) {
     dirty.clear();
     if (!ops.length) return;
     const caret = saveSel();
+    // The deleted text kept in front of the cursor: it moves past it (Delete), or stays before it (Backspace).
+    if (shift && caret && !caret.cell) for (const k of ["a", "f"]) { const pt = caret[k]; if (pt?.id === shift.id && (pt.off > shift.at || /Forward$/.test(lastInput))) pt.off += shift.keep; }
     // Typing in one paragraph is one step to undo; moving elsewhere starts another.
     const blocksTouched = new Set(ops.map((o) => o.id));
     ctx.commit(ops, { group: ops.every((o) => o.t === "text") && blocksTouched.size === 1 ? `type:${ops[0].id}` : null });
     // Blocks the browser drew its own way (splits, joins, pasted styles) are drawn again cleanly.
-    const redraw = ops.some((o) => o.t !== "text" && o.t !== "cell") || pendingFmt;
-    if (redraw) sync(caret);
+    const redraw = ops.some((o) => o.t !== "text" && o.t !== "cell") || pendingFmt || shift;
+    if (redraw) sync(caret, !!shift);
     else { for (const op of ops) { const b = doc().blocks.find((x) => x.id === op.id); if (b) rendered.set(b.id, sig(b)); } words(); requestAnimationFrame(() => { pageMarks(); drawCursors(); }); }
     presence();
   }
@@ -517,9 +560,11 @@ function mount(host, ctx) {
   $root.addEventListener("compositionend", () => { composing = false; setTimeout(flush); });
 
   // ---- keys
+  let lastInput = "";
   $root.addEventListener("beforeinput", (e) => {
     if (ctx.readOnly) { e.preventDefault(); return; }
     const t = e.inputType;
+    lastInput = t;
     if (t === "historyUndo") { e.preventDefault(); ctx.undo(); return; }
     if (t === "historyRedo") { e.preventDefault(); ctx.redo(); return; }
     if (t === "formatBold") { e.preventDefault(); toggle("b"); return; }
@@ -546,6 +591,8 @@ function mount(host, ctx) {
     if (mod && k === "f") { e.preventDefault(); e.stopPropagation(); findBar(); return; }
     if (mod && k === "enter") { e.preventDefault(); insertBlock({ type: "pagebreak" }); return; }
     if (mod && k === "\\") { e.preventDefault(); clearFormat(); return; }
+    if (mod && e.shiftKey && k === "e") { e.preventDefault(); toggleTrack(); return; }
+    if (mod && e.altKey && (k === "f" || k === "d")) { e.preventDefault(); insertNote(k === "f" ? "foot" : "end"); return; }
     if (e.key === "Tab" && !mod) {
       if (inCell()) { e.preventDefault(); nextCell(e.shiftKey ? -1 : 1); return; }
       const b = caretBlock();
@@ -666,8 +713,11 @@ function mount(host, ctx) {
       tool("outdent", "Decrease indent", () => indent(-1)), tool("indent", "Increase indent", () => indent(1)), h("span", { class: "ox-sep" }),
       tool("table", "Table", (e) => tablePicker(e.currentTarget)), tool("image", "Picture", pickImage),
       tool("pagebreak", "Page break (Ctrl+Enter)", () => insertBlock({ type: "pagebreak" })), tool("hr", "Horizontal line", () => insertBlock({ type: "hr" })),
-      tool("page", "Page setup", pageSetup), tool("comment", "Comment", () => { const b = caretBlock(); ctx.comment(b ? `block:${b.id}` : null); }), tool("search", "Find and replace (Ctrl+F)", findBar));
-  } else tb.append(tool("search", "Find (Ctrl+F)", findBar), tool("comment", "Comment", () => { const b = caretBlock(); ctx.comment(b ? `block:${b.id}` : null); }));
+      tool("footnote", "Footnote", (e) => W().popMenu(e.currentTarget, [{ label: "Footnote", hint: "Ctrl+Alt+F", run: () => insertNote("foot") }, { label: "Endnote", hint: "Ctrl+Alt+D", run: () => insertNote("end") }])),
+      tool("page", "Page setup", pageSetup), h("span", { class: "ox-sep" }),
+      btn.track = tool("track", "Track changes (Ctrl+Shift+E)", toggleTrack), tool("review", "Review changes", (e) => reviewMenu(e.currentTarget)),
+      tool("comment", "Comment", () => { const b = caretBlock(); ctx.comment(b ? `block:${b.id}` : null); }), tool("search", "Find and replace (Ctrl+F)", findBar));
+  } else tb.append(tool("search", "Find (Ctrl+F)", findBar), tool("review", "Tracked changes", (e) => reviewMenu(e.currentTarget)), tool("comment", "Comment", () => { const b = caretBlock(); ctx.comment(b ? `block:${b.id}` : null); }));
   function syncToolbar() {
     if (ctx.readOnly) return;
     const r = runAtCaret();
@@ -678,6 +728,8 @@ function mount(host, ctx) {
     styleSel.value = b?.style || "normal";
     btn.left.classList.toggle("on", !!b && !b.align); btn.center.classList.toggle("on", b?.align === "center"); btn.right.classList.toggle("on", b?.align === "right"); btn.justify.classList.toggle("on", b?.align === "justify");
     btn.bullet.classList.toggle("on", b?.list?.kind === "bullet"); btn.number.classList.toggle("on", b?.list?.kind === "number");
+    btn.track.classList.toggle("on", !!doc().track);
+    btn.track.setAttribute("aria-pressed", doc().track ? "true" : "false");
   }
   let lastCaret = null;
   const onSel = () => {
@@ -969,6 +1021,154 @@ function mount(host, ctx) {
   }
 
   // ---- printing: the real pagination comes from the browser, at the page size and margins chosen
+  // ---- tracked changes
+  function toggleTrack() {
+    if (ctx.readOnly) return;
+    commitSync({ t: "track", on: !doc().track });
+    syncToolbar();
+    ctx.toast(doc().track ? "Track changes is on for everyone: edits are marked until someone accepts or rejects them." : "Track changes is off. Changes already marked stay until accepted or rejected.");
+  }
+  const marked = (runs) => (runs || []).some((r) => r.ins || r.del);
+  /** Every tracked change in the main text, in order: [{ id, from, to, kind, mark }]. */
+  const allChanges = () => doc().blocks.flatMap((b) => (b.type === "p" ? D().changes(b.runs).map((c) => ({ ...c, id: b.id })) : []));
+  function changeAtCaret() {
+    const s = saveSel();
+    if (!s || s.cell) return null;
+    const b = doc().blocks.find((x) => x.id === s.f.id);
+    if (!b || b.type !== "p") return null;
+    const off = s.f.off, cs = D().changes(b.runs);
+    const c = cs.find((x) => off > x.from && off < x.to) || cs.find((x) => off === x.from) || cs.find((x) => off === x.to);
+    return c ? { b, c } : null;
+  }
+  function goChange(dir) {
+    const list = allChanges();
+    if (!list.length) { ctx.toast("There are no tracked changes."); return; }
+    const s = saveSel();
+    const ids = doc().blocks.map((b) => b.id);
+    const here = s && !s.cell ? { i: ids.indexOf(s.f.id), off: s.f.off } : { i: -1, off: 0 };
+    const key = (x) => ids.indexOf(x.id) * 1e7 + x.from;
+    const pos = here.i * 1e7 + here.off;
+    const start = s && !s.cell ? ids.indexOf(s.a.id) * 1e7 + (s.a.id === s.f.id ? Math.min(s.a.off, s.f.off) : s.a.off) : pos;
+    const next = dir > 0 ? list.find((x) => key(x) > pos) : [...list].reverse().find((x) => key(x) < start);
+    const target = next || (dir > 0 ? list[0] : list[list.length - 1]);
+    const el = $root.querySelector(`:scope > [data-id="${CSS.escape(target.id)}"]`);
+    if (!el) return;
+    $root.focus({ preventScroll: true });
+    const [an, ao] = domAt(el, target.from), [fn, fo] = domAt(el, target.to);
+    getSelection().setBaseAndExtent(an, ao, fn, fo);
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    ctx.toast(`${target.kind === "ins" ? "Inserted" : "Deleted"} by ${D().author(target.mark)}${whenText(D().when(target.mark)) ? ", " + whenText(D().when(target.mark)) : ""}`);
+  }
+  /** Accepts or rejects the selected changes, the change at the cursor, or ($all) every change in the document. */
+  function review(accept, all = false) {
+    if (ctx.readOnly) return;
+    flush();
+    const ops = [];
+    const fixRuns = (runs) => D().resolve(runs, 0, D().len(runs), accept);
+    if (all) {
+      for (const b of doc().blocks) {
+        if (b.type === "p" && marked(b.runs)) ops.push(...textOps(b.id, b.runs, fixRuns(b.runs)));
+        else if (b.type === "table") b.rows.forEach((row, r) => row.cells.forEach((cell, c) => { if ((cell.blocks || []).some((p) => marked(p.runs))) ops.push({ t: "cell", id: b.id, r, c, blocks: cell.blocks.map((p) => (p.type === "p" ? { ...p, runs: fixRuns(p.runs) } : p)) }); }));
+      }
+      for (const which of ["header", "footer"]) if ((doc()[which] || []).some((p) => marked(p.runs))) ops.push({ t: "hf", which, blocks: doc()[which].map((p) => ({ ...p, runs: fixRuns(p.runs) })) });
+      for (const [id, n] of Object.entries(doc().notes || {})) if (n.blocks.some((p) => marked(p.runs))) ops.push({ t: "note", id, note: { ...n, blocks: n.blocks.map((p) => ({ ...p, runs: fixRuns(p.runs) })) } });
+      if (!ops.length) { ctx.toast("There are no tracked changes."); return; }
+      commitSync(ops);
+      ctx.toast(accept ? "All changes accepted." : "All changes rejected.");
+      return;
+    }
+    const sel = selBlocks();
+    if (sel.length && !(sel.length === 1 && sel[0].from === sel[0].to)) {
+      for (const { b, from, to } of sel) if (marked(D().slice(b.runs, from, to))) ops.push(...textOps(b.id, b.runs, D().resolve(b.runs, from, to, accept)));
+    } else {
+      const hit = changeAtCaret();
+      if (!hit) { goChange(1); return; }
+      ops.push(...textOps(hit.b.id, hit.b.runs, D().resolve(hit.b.runs, hit.c.from, hit.c.to, accept, (k, m) => k === hit.c.kind && m === hit.c.mark)));
+    }
+    if (ops.length) commitSync(ops);
+    if (allChanges().length) goChange(1); else ctx.toast("That was the last tracked change.");
+  }
+  function reviewMenu(anchor) {
+    const n = allChanges().length + doc().blocks.filter((b) => b.type === "table" && b.rows.some((r) => r.cells.some((c) => (c.blocks || []).some((p) => marked(p.runs))))).length;
+    const items = [{ label: "Next change", run: () => goChange(1) }, { label: "Previous change", run: () => goChange(-1) }];
+    if (!ctx.readOnly) items.unshift({ label: doc().track ? "Turn off track changes" : "Turn on track changes", hint: "Ctrl+Shift+E", run: toggleTrack }, null);
+    if (!ctx.readOnly) items.push(null, { label: "Accept this change", run: () => review(true) }, { label: "Reject this change", run: () => review(false) }, null,
+      { label: "Accept all changes", run: () => review(true, true) }, { label: "Reject all changes", class: "danger", run: () => { if (confirm("Reject every tracked change in the document?")) review(false, true); } });
+    items.unshift(h("div", { class: "ox-menu-note" }, n ? `${n} tracked change${n === 1 ? "" : "s"}` : "No tracked changes"));
+    W().popMenu(anchor, items);
+  }
+
+  // ---- footnotes and endnotes
+  function insertNote(kind) {
+    if (ctx.readOnly) return;
+    flush();
+    const s = saveSel();
+    if (!s || s.cell) { ctx.toast("Put the cursor in the text where the note goes (notes can't go in tables)."); return; }
+    const b = doc().blocks.find((x) => x.id === s.f.id);
+    if (!b || b.type !== "p") return;
+    const id = "n" + D().newId().slice(1);
+    const ref = { text: D().NOTE_CHAR, fn: id, ...(doc().track ? { ins: D().stamp(ctx.me?.name) } : {}) };
+    ctx.commit([{ t: "note", id, note: { kind, blocks: [{ id: D().newId(), type: "p", runs: [] }] } }, { t: "text", id: b.id, at: s.f.off, del: 0, ins: [ref] }]);
+    sync({ a: { id: b.id, off: s.f.off + 1 }, f: { id: b.id, off: s.f.off + 1 } });
+    focusNote(id);
+  }
+  function focusNote(id) {
+    requestAnimationFrame(() => {
+      const body = $notes.querySelector(`.ox-note-body[data-note="${CSS.escape(id)}"]`);
+      if (!body) return;
+      body.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (ctx.readOnly) return;
+      body.focus({ preventScroll: true });
+      const p = body.lastElementChild || body;
+      const [n, o] = domAt(p, D().len(readRuns(p)));
+      getSelection().setBaseAndExtent(n, o, n, o);
+    });
+  }
+  function jumpToRef(id) {
+    const el = $root.querySelector(`.ox-fnref[data-fn="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("ox-flash"); setTimeout(() => el.classList.remove("ox-flash"), 1500);
+  }
+  let notesKey = "";
+  function drawNotes() {
+    const order = D().noteOrder(doc());
+    const label = new Map(order.map((o) => [o.id, D().noteLabel(o.kind, o.n)]));
+    $root.querySelectorAll(".ox-fnref").forEach((el) => { el.dataset.n = label.get(el.dataset.fn) || "?"; });
+    $notes.hidden = !order.length;
+    const key = order.map((o) => o.id).join(" ");
+    const focused = document.activeElement?.closest?.(".ox-note-body")?.dataset.note;
+    const noteEl = (o) => {
+      const n = doc().notes[o.id], sig2 = JSON.stringify(n.blocks);
+      const old = $notes.querySelector(`.ox-note[data-note="${CSS.escape(o.id)}"]`);
+      if (old && (o.id === focused || old.dataset.sig === sig2)) { old.querySelector(".ox-note-n").textContent = label.get(o.id); return old; }
+      const body = h("div", { class: "ox-note-body", role: "textbox", "aria-label": `${o.kind === "end" ? "Endnote" : "Footnote"} ${label.get(o.id)}`, dataset: { note: o.id } });
+      if (!ctx.readOnly) body.contentEditable = "true";
+      for (const b of n.blocks.length ? n.blocks : [{ id: D().newId(), type: "p", runs: [] }]) if (b.type === "p") body.append(paraEl(b));
+      return h("div", { class: "ox-note", dataset: { note: o.id, sig: sig2 } }, h("button", { type: "button", class: "ox-note-n", title: "Go to where it's referred to", onclick: () => jumpToRef(o.id) }, label.get(o.id)), body);
+    };
+    if (focused && key === notesKey) { for (const o of order) noteEl(o); return; }
+    notesKey = key;
+    const sections = [["foot", "Footnotes"], ["end", "Endnotes"]].map(([kind, title]) => { const items = order.filter((o) => o.kind === kind); return items.length ? h("section", { class: "ox-notes-sec" }, h("div", { class: "ox-notes-title" }, title), items.map(noteEl)) : null; }).filter(Boolean);
+    $notes.replaceChildren(...sections);
+  }
+  const noteTimers = new Map();
+  function saveNote(body) {
+    if (ctx.readOnly) return;
+    const id = body.dataset.note, n = doc().notes?.[id];
+    if (!n) return;
+    const blocks = [...body.children].filter((x) => x.tagName !== "BR").map((x) => { if (!x.dataset.id) x.dataset.id = D().newId(); return { ...readPara(x), type: "p" }; });
+    if (!body.children.length && body.textContent.trim()) blocks.push({ id: D().newId(), type: "p", runs: readRuns(body) });
+    if (JSON.stringify(blocks.map((b) => b.runs)) === JSON.stringify(n.blocks.map((b) => b.runs))) return;
+    ctx.commit({ t: "note", id, note: { kind: n.kind, blocks } });
+    const el = body.closest(".ox-note");
+    if (el) el.dataset.sig = JSON.stringify(doc().notes[id].blocks);
+  }
+  $notes.addEventListener("input", (e) => { const body = e.target.closest?.(".ox-note-body"); if (!body) return; clearTimeout(noteTimers.get(body.dataset.note)); noteTimers.set(body.dataset.note, setTimeout(() => saveNote(body), 600)); });
+  $notes.addEventListener("focusout", (e) => { const body = e.target.closest?.(".ox-note-body"); if (!body) return; clearTimeout(noteTimers.get(body.dataset.note)); saveNote(body); });
+  $notes.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") e.stopPropagation(); });
+  $root.addEventListener("click", (e) => { const ref = e.target.closest?.(".ox-fnref"); if (ref) { e.preventDefault(); focusNote(ref.dataset.fn); } });
+
   function print() {
     const p = doc().page || {};
     const [w, ht] = PAGES[p.size] || PAGES.A4;
@@ -978,6 +1178,7 @@ function mount(host, ctx) {
     if (doc().header?.length) { const hd = clean($header); hd.className = "print-header"; body.append(hd); }
     if (doc().footer?.length) { const ft = clean($footer); ft.className = "print-footer"; body.append(ft); }
     const main = clean($root); main.className = "ox-doc print-main"; body.append(main);
+    if (!$notes.hidden) body.append(clean($notes));
     UI().printHtml(ctx.file.name, body, [
       `@page { size: ${p.landscape ? `${ht}mm ${w}mm` : `${w}mm ${ht}mm`}; margin: ${m.t}mm ${m.r}mm ${m.b}mm ${m.l}mm; }`,
       "body { margin: 0; font: 11pt/1.4 Calibri, Carlito, Arial, sans-serif; color: #000; }",
@@ -1000,6 +1201,9 @@ function mount(host, ctx) {
       ".print-footer { position: fixed; bottom: -12mm; left: 0; right: 0; font-size: 9pt; color: #444; }",
       ".print-main { counter-reset: n0; }",
       "[data-list=number] { counter-increment: n0; } [data-list=number]::before { content: counter(n0) '.'; position: absolute; left: 0; }",
+      ".ox-ins { color: var(--who); text-decoration: underline; } .ox-del { color: var(--who); text-decoration: line-through; }",
+      ".ox-fnref { font-size: 0; } .ox-fnref::after { content: attr(data-n); font-size: 7pt; vertical-align: super; }",
+      ".ox-notes { margin-top: 16pt; padding-top: 6pt; border-top: 1px solid #000; font-size: 9pt; } .ox-notes-title { font-weight: 700; margin: 6pt 0 3pt; } .ox-note { display: flex; gap: 6pt; } .ox-note-n { border: 0; background: none; font: inherit; padding: 0; vertical-align: super; font-size: 7pt; } .ox-note-body p { margin: 0 0 3pt; }",
     ].join("\n"));
   }
 
@@ -1022,7 +1226,7 @@ function mount(host, ctx) {
     reveal(anchor) { const m = /^block:(.+)$/.exec(anchor || ""); const el = m && $root.querySelector(`:scope > [data-id="${CSS.escape(m[1])}"]`); if (el) { el.scrollIntoView({ block: "center", behavior: "smooth" }); el.classList.add("ox-flash"); setTimeout(() => el.classList.remove("ox-flash"), 1500); } },
     commentsChanged: commentMarks,
     print,
-    menu: () => (ctx.readOnly ? [] : [{ label: "Page setup…", icon: "file", run: pageSetup }]),
+    menu: () => (ctx.readOnly ? [] : [{ label: "Page setup…", icon: "file", run: pageSetup }, { label: doc().track ? "Turn off track changes" : "Turn on track changes", icon: "check", run: toggleTrack }]),
     destroy() { observer.disconnect(); document.removeEventListener("selectionchange", onSel); },
   };
 }
