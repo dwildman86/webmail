@@ -6,6 +6,7 @@
 (() => {
 const F = () => window.OfficeFormula;
 const M = () => window.OfficeSheetModel;
+const X = () => window.OfficeSheetExtras;
 const UI = () => window.OfficeUI;
 
 const DEF_W = 96, DEF_H = 22, HDR_W = 46, HDR_H = 24;
@@ -106,6 +107,7 @@ function mount(host, ctx) {
   let rendered = null; // { r0, r1, c0, c1 }
   let clip = null;     // the last copy here: { tsv, cells, cut }
   let othersNow = ctx.others || [];
+  let cfNow = null;     // the sheet's conditional formatting, worked out (sheet-extras.js)
 
   // ---- layout
   const $name = h("input", { class: "ox-namebox", "aria-label": "Cell", spellcheck: false, onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); goTo(e.target.value); } if (e.key === "Escape") { $name.value = F().addr(sel.r, sel.c); focusGrid(); } } });
@@ -154,6 +156,7 @@ function mount(host, ctx) {
       tool("more", "Vertical alignment", (e) => W().popMenu(e.currentTarget, [["top", "Top"], ["middle", "Middle"], [null, "Bottom"]].map(([v, l]) => ({ label: l, run: () => styleSel({ va: v }) })))),
       btn.wrap = tool("wrap", "Wrap text", () => toggle("wrap")), h("span", { class: "ox-sep" }),
       tool("sigma", "Sum (AutoSum)", autoSum), tool("sort", "Sort", (e) => sortMenu(e.currentTarget)), btn.filter = tool("filter", "Filter", toggleFilter),
+      tool("condFormat", "Conditional formatting", (e) => cfMenu(e.currentTarget)), tool("chart", "Insert chart", (e) => chartMenu(e.currentTarget)), tool("pivot", "Pivot table", (e) => pivotStart(e.currentTarget)),
       tool("freeze", "Freeze", (e) => freezeMenu(e.currentTarget)), tool("insertRow", "Rows and columns", (e) => rowsMenu(e.currentTarget)),
       tool("comment", "Comment", () => ctx.comment(anchorFor(sel.r, sel.c))), tool("search", "Find and replace (Ctrl+F)", findBar), tool("clear", "Clear formatting", clearFormat));
   } else {
@@ -254,7 +257,8 @@ function mount(host, ctx) {
     const cell = s.cells.get(`${r},${c}`);
     const st = cell?.s;
     const d = cell ? display(s, r, c) : { text: "" };
-    if (!d.text && !st?.bg && !st?.border && !anchors.has(anchorFor(r, c))) return;
+    const cx = cfNow?.at(r, c);
+    if (!d.text && !st?.bg && !st?.border && !cx && !anchors.has(anchorFor(r, c))) return;
     let r2 = r, c2 = c;
     if (g) { r2 = g.r2; c2 = g.c2; }
     const box = cellBox(r, c, r2, c2);
@@ -284,10 +288,19 @@ function mount(host, ctx) {
       if (st.border) { const B = { 1: "1px solid #444", 2: "2px solid #222", 3: "3px solid #000" }; for (const [k, side] of [["t", "Top"], ["r", "Right"], ["b", "Bottom"], ["l", "Left"]]) if (st.border[k]) el.style[`border${side}`] = B[st.border[k]]; }
     }
     if (d.color) el.style.color = d.color;
+    if (cx) {
+      if (cx.bg) el.style.backgroundColor = cx.bg;
+      if (cx.color) el.style.color = cx.color;
+      if (cx.b) el.style.fontWeight = "700";
+      if (cx.i) el.style.fontStyle = "italic";
+      if (cx.u || cx.s) el.style.textDecoration = [cx.u && "underline", cx.s && "line-through"].filter(Boolean).join(" ");
+    }
     if (d.err) el.classList.add("err");
     el.style.justifyContent = halign === "right" ? "flex-end" : halign === "center" ? "center" : "flex-start";
     if (halign === "center") el.style.textAlign = "center"; else if (halign === "right") el.style.textAlign = "right";
-    el.textContent = d.text;
+    el.textContent = cx?.icon?.hide ? "" : d.text;
+    if (cx?.icon) { const ic = h("span", { class: "ox-cficon", "aria-hidden": "true" }, cx.icon.g); ic.style.color = cx.icon.color; el.prepend(ic); el.style.justifyContent = "space-between"; }
+    if (cx?.bar) { const bar = h("span", { class: "ox-cfbar" }); bar.style.left = `${(cx.bar.from * 100).toFixed(2)}%`; bar.style.width = `${((cx.bar.to - cx.bar.from) * 100).toFixed(2)}%`; bar.style.background = `linear-gradient(90deg, ${cx.bar.neg ? "#ff0000" : cx.bar.color}, ${cx.bar.neg ? "#ff000033" : cx.bar.color + "33"})`; el.prepend(bar); }
     if (anchors.has(anchorFor(r, c))) el.append(h("span", { class: "ox-cnote", title: "Comment" }));
     out.get(box.layer).append(el);
   }
@@ -297,6 +310,7 @@ function mount(host, ctx) {
     const c0 = cols.at(vx), c1 = cols.at(vx + $scroll.clientWidth) + 1, r0 = rows.at(vy), r1 = rows.at(vy + $scroll.clientHeight) + 1;
     if (!force && rendered && r0 >= rendered.r0 && r1 <= rendered.r1 && c0 >= rendered.c0 && c1 <= rendered.c1) { drawHeaders(); return; }
     rendered = { r0: Math.max(fz.r, r0 - 20), r1: r1 + 30, c0: Math.max(fz.c, c0 - 6), c1: c1 + 8 };
+    cfNow = cfFor(s);
     const out = new Map(Object.values(layers).map((l) => [l, document.createDocumentFragment()]));
     const anchors = ctx.commentAnchors?.() || new Set();
     // Merged cells starting off screen still show.
@@ -328,6 +342,7 @@ function mount(host, ctx) {
     drawSelection();
     drawOthers();
     drawHeaders();
+    drawCharts();
   }
   function drawHeaders() {
     const fz = frozen(), s = sh();
@@ -644,6 +659,7 @@ function mount(host, ctx) {
   $grid.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     const t = e.target;
+    if (chartSel) { chartSel = null; drawCharts(); }
     if (t.closest(".ox-filterbtn")) return;
     if (t.classList.contains("ox-resize")) { startResize(e, t); return; }
     if (t.closest(".ox-hc")) { const c = +t.closest(".ox-hc").dataset.c; if (e.shiftKey) select(0, sel.c1, Infinity, c, true); else select(0, c, Infinity, c); sel.r = 0; drag = { kind: "cols", c }; focusGrid(); return; }
@@ -896,6 +912,8 @@ function mount(host, ctx) {
       else items.push({ label: "Insert…", run: () => rowsMenu(anchor) });
       items.push({ label: "Clear contents", hint: "Delete", run: clearContents }, { label: "Clear formatting", run: clearFormat }, null);
     }
+    const pv = pivotAt(sel.r, sel.c);
+    if (pv && !ctx.readOnly) items.push({ label: "Edit pivot table…", run: () => pivotPanel(pv.id, anchor) }, { label: "Refresh pivot table", run: () => pivotRefresh(pv.id) }, null);
     items.push({ label: "Sort A → Z", run: () => sortRange(1) }, { label: "Sort Z → A", run: () => sortRange(-1) }, { label: "Comment", run: () => ctx.comment(anchorFor(sel.r, sel.c)) });
     W().popMenu(anchor, items.filter((x, i, a) => !(x === null && (i === 0 || a[i - 1] === null || i === a.length - 1))));
   }
@@ -1154,6 +1172,357 @@ function mount(host, ctx) {
   // ---- comments
   const anchorFor = (r, c) => `cell:${sheetId}:${F().addr(r, c)}`;
 
+  // ---- conditional formatting, charts and pivot tables (sheet-extras.js works them out)
+  const oid = () => Math.random().toString(36).slice(2, 10);
+  const obj = (kind, id, data) => change({ t: "obj", sheet: sheetId, kind, id, data });
+  const sheetByName = (n) => wbNow().sheets.find((x) => x.name.toLowerCase() === String(n).toLowerCase());
+  const dataOf = (o) => { const { id, ...d } = o; void id; return d; };
+  /** A formula's value as if in cell r, c of sheet $s (conditional formatting's own formulas). */
+  const evalIn = (s, src, r, c) => {
+    try {
+      return F().evaluate(F().parse(src), { sheet: s.name, row: r, col: c, has: (n) => !!sheetByName(n), used: (n) => M().extent(sheetByName(n) || s), get: (n, rr, cc) => { const x = sheetByName(n); return x ? book.value(x, rr, cc) : null; } });
+    } catch { return null; }
+  };
+  const cfFor = (s) => (s.cf?.length ? X().conditional(s.cf, (r, c) => book.value(s, r, c), (src, r, c) => evalIn(s, src, r, c)) : null);
+  const rangesText = (ranges) => ranges.map((g) => (g.r1 === g.r2 && g.c1 === g.c2 ? F().addr(g.r1, g.c1) : `${F().addr(g.r1, g.c1)}:${F().addr(g.r2, g.c2)}`)).join(" ");
+  const parseRanges = (text) => String(text || "").split(/[\s,;]+/).filter(Boolean).map((t) => M().parseRef(t.replace(/^\$?/, ""), sh().name)).filter((g) => g && (!g.sheet || g.sheet.toLowerCase() === sh().name.toLowerCase())).map(({ r1, c1, r2, c2 }) => ({ r1, c1, r2, c2 }));
+  /** The selection as a range, cut to the used area when whole rows or columns are selected. */
+  function selRange() { const n = norm(); return { r1: n.r1, c1: n.c1, r2: n.r2, c2: n.c2 }; }
+  /** Something typed for a rule: a number, a formula (=…), or text (quoted, as Excel stores it). */
+  const asFormula = (v) => { const s = String(v ?? "").trim(); if (s.startsWith("=")) return s.slice(1); if (s !== "" && Number.isFinite(+s)) return String(+s); return `"${s.replace(/"/g, '""')}"`; };
+  const CF_STYLES = [["Light red fill with dark red text", { bg: "#ffc7ce", color: "#9c0006" }], ["Yellow fill with dark yellow text", { bg: "#ffeb9c", color: "#9c5700" }], ["Green fill with dark green text", { bg: "#c6efce", color: "#006100" }],
+    ["Light red fill", { bg: "#ffc7ce" }], ["Red text", { color: "#c00000" }], ["Bold", { b: true }]];
+  function addCf(rule, style = {}) {
+    if (ctx.readOnly) return;
+    const pri = Math.min(1, ...(sh().cf || []).map((o) => o.pri ?? 0)) - 1; // newest first, as in Excel
+    obj("cf", "cf" + oid(), { ranges: [selRange()], pri, rule, style });
+  }
+  function cfForm(anchor, title, fields, make, { withStyle = true } = {}) {
+    UI().popover(anchor, (pop, close) => {
+      const inputs = fields.map(([label, def = "", opts]) => (opts ? UI().select(label, opts, () => {}, "ox-in") : h("input", { class: "ox-in", value: def, "aria-label": label })));
+      if (fields[0]?.[2]) inputs[0].value = fields[0][1];
+      const style = UI().select("Format with", CF_STYLES.map(([l], i) => [String(i), l]), () => {}, "ox-in");
+      const form = h("form", { class: "ox-form", onsubmit: (e) => { e.preventDefault(); const rule = make(inputs.map((i) => i.value)); if (!rule) return; close(); addCf(rule, withStyle ? { ...CF_STYLES[+style.value][1] } : {}); focusGrid(); } },
+        h("strong", {}, title),
+        fields.map(([label], i) => h("label", {}, h("span", {}, label), inputs[i])),
+        withStyle ? h("label", {}, h("span", {}, "Format with"), style) : null,
+        h("div", { class: "ox-form-btns" }, h("button", { type: "button", class: "btn btn-sm", onclick: close }, "Cancel"), h("button", { class: "btn btn-sm btn-primary" }, "Add rule")));
+      pop.append(form);
+      setTimeout(() => inputs[0]?.focus?.());
+    });
+  }
+  function cfMenu(anchor) {
+    const cell = (op, title, two) => () => cfForm(anchor, title, two ? [["From"], ["To"]] : [["Value", String(isNum(book.value(sh(), sel.r, sel.c)) ? book.value(sh(), sel.r, sel.c) : "")]], (v) => (v[0] === "" ? null : { type: "cell", op, a: asFormula(v[0]), ...(two ? { b: asFormula(v[1]) } : {}) }));
+    const scale = (stops) => () => addCf({ type: "scale", stops });
+    W().popMenu(anchor, [
+      { label: "Greater than…", run: cell("gt", "Format cells greater than") },
+      { label: "Less than…", run: cell("lt", "Format cells less than") },
+      { label: "Between…", run: cell("between", "Format cells between", true) },
+      { label: "Equal to…", run: cell("eq", "Format cells equal to") },
+      { label: "Text that contains…", run: () => cfForm(anchor, "Format cells with text containing", [["Text"]], (v) => (v[0] ? { type: "text", op: "contains", text: v[0] } : null)) },
+      { label: "A date occurring…", run: () => cfForm(anchor, "Format dates occurring", [["When", "thisWeek", [["yesterday", "Yesterday"], ["today", "Today"], ["tomorrow", "Tomorrow"], ["last7Days", "In the last 7 days"], ["lastWeek", "Last week"], ["thisWeek", "This week"], ["nextWeek", "Next week"], ["lastMonth", "Last month"], ["thisMonth", "This month"], ["nextMonth", "Next month"]]]], (v) => ({ type: "date", period: v[0] })) },
+      { label: "Duplicate values", run: () => cfForm(anchor, "Format duplicate values", [], () => ({ type: "dup" })) },
+      null,
+      { label: "Top 10 items…", run: () => cfForm(anchor, "Format the top", [["How many", "10"]], (v) => ({ type: "top", n: Math.max(1, +v[0] || 10) })) },
+      { label: "Bottom 10 items…", run: () => cfForm(anchor, "Format the bottom", [["How many", "10"]], (v) => ({ type: "top", n: Math.max(1, +v[0] || 10), bottom: true })) },
+      { label: "Above average", run: () => cfForm(anchor, "Format values above average", [], () => ({ type: "avg" })) },
+      { label: "Below average", run: () => cfForm(anchor, "Format values below average", [], () => ({ type: "avg", below: true })) },
+      null,
+      { label: "Data bars", run: () => addCf({ type: "bar", color: "#638ec6" }) },
+      { label: "Colour scale: green, yellow, red", run: scale([{ kind: "min", color: "#63be7b" }, { kind: "percentile", val: "50", color: "#ffeb84" }, { kind: "max", color: "#f8696b" }]) },
+      { label: "Colour scale: red, yellow, green", run: scale([{ kind: "min", color: "#f8696b" }, { kind: "percentile", val: "50", color: "#ffeb84" }, { kind: "max", color: "#63be7b" }]) },
+      { label: "Colour scale: white to blue", run: scale([{ kind: "min", color: "#ffffff" }, { kind: "max", color: "#5a8ac6" }]) },
+      { label: "Icons: arrows", run: () => addCf({ type: "icons", set: "3Arrows" }) },
+      { label: "Icons: traffic lights", run: () => addCf({ type: "icons", set: "3TrafficLights1" }) },
+      null,
+      { label: "Manage rules…", run: () => cfManager(anchor) },
+      { label: "Clear rules from the selection", run: cfClearSel },
+    ]);
+  }
+  function cfClearSel() {
+    const s0 = selRange();
+    const minus = (g, s) => {
+      if (s.r2 < g.r1 || s.r1 > g.r2 || s.c2 < g.c1 || s.c1 > g.c2) return [g];
+      const out = [];
+      if (g.r1 < s.r1) out.push({ ...g, r2: s.r1 - 1 });
+      if (g.r2 > s.r2) out.push({ ...g, r1: s.r2 + 1 });
+      const r1 = Math.max(g.r1, s.r1), r2 = Math.min(g.r2, s.r2);
+      if (g.c1 < s.c1) out.push({ r1, r2, c1: g.c1, c2: s.c1 - 1 });
+      if (g.c2 > s.c2) out.push({ r1, r2, c1: s.c2 + 1, c2: g.c2 });
+      return out;
+    };
+    const ops = [];
+    for (const o of sh().cf || []) {
+      const ranges = o.ranges.flatMap((g) => minus(g, s0));
+      if (JSON.stringify(ranges) === JSON.stringify(o.ranges)) continue;
+      ops.push({ t: "obj", sheet: sheetId, kind: "cf", id: o.id, data: ranges.length ? { ...dataOf(o), ranges } : null });
+    }
+    if (ops.length) change(ops); else ctx.toast("No conditional formatting in the selection.");
+  }
+  function cfManager(anchor) {
+    UI().popover(anchor, (pop) => {
+      const list = h("div", { class: "ox-rules" });
+      const render = () => {
+        const rules = sh().cf || [];
+        list.replaceChildren(...(rules.length ? [] : [h("p", { class: "muted" }, "No conditional formatting on this sheet.")]),
+          ...rules.map((o, i) => {
+            const swatch = h("span", { class: "ox-rule-swatch" }, o.rule.type === "bar" ? "▬" : o.rule.type === "icons" ? X().iconFor(o.rule.set, X().iconCount(o.rule.set) - 1, X().iconCount(o.rule.set)).g : "Ab");
+            if (o.style?.bg) swatch.style.background = o.style.bg;
+            if (o.style?.color) swatch.style.color = o.style.color;
+            if (o.style?.b) swatch.style.fontWeight = "700";
+            if (o.rule.type === "scale") swatch.style.background = `linear-gradient(90deg, ${o.rule.stops.map((x) => x.color).join(", ")})`;
+            if (o.rule.type === "bar") swatch.style.color = o.rule.color;
+            const range = h("input", { class: "ox-in ox-rule-range", value: rangesText(o.ranges), "aria-label": "Applies to", onchange: (e) => { const ranges = parseRanges(e.target.value); if (ranges.length) { obj("cf", o.id, { ...dataOf(o), ranges }); render(); } else e.target.value = rangesText(o.ranges); } });
+            const swap = (j) => { const other = rules[j]; if (!other) return; change([{ t: "obj", sheet: sheetId, kind: "cf", id: o.id, data: { ...dataOf(o), pri: other.pri } }, { t: "obj", sheet: sheetId, kind: "cf", id: other.id, data: { ...dataOf(other), pri: o.pri } }]); render(); };
+            return h("div", { class: "ox-rule" }, swatch,
+              h("div", { class: "grow" }, h("div", { class: "ox-rule-name" }, X().ruleLabel(o.rule)), range),
+              ctx.readOnly ? null : h("div", { class: "ox-rule-btns" },
+                h("button", { type: "button", class: "ox-tool", title: "Higher priority", "aria-label": "Higher priority", disabled: i === 0, onclick: () => swap(i - 1) }, "↑"),
+                h("button", { type: "button", class: "ox-tool", title: "Lower priority", "aria-label": "Lower priority", disabled: i === rules.length - 1, onclick: () => swap(i + 1) }, "↓"),
+                h("button", { type: "button", class: "ox-tool", title: "Delete rule", "aria-label": "Delete rule", onclick: () => { obj("cf", o.id, null); render(); } }, icon("trash"))));
+          }));
+      };
+      render();
+      pop.classList.add("ox-pop-wide");
+      pop.append(h("strong", {}, "Conditional formatting on this sheet"), h("p", { class: "muted ox-small" }, "Rules higher up win when two set the same thing."), list);
+    });
+  }
+
+  // Charts: drawn over the cells, anchored to the cell at their top left.
+  const $charts = h("div", { class: "ox-charts" });
+  $scroll.append($charts);
+  let chartSel = null;
+  function chartBox(a) { const fz = frozen(); return { x: cols.pos(a.c) - cols.pos(fz.c) + (a.dx || 0), y: rows.pos(a.r) - rows.pos(fz.r) + (a.dy || 0), w: a.w || 480, h: a.h || 288 }; }
+  function anchorAt(x, y, w, ht) { const fz = frozen(); const ax = x + cols.pos(fz.c), ay = y + rows.pos(fz.r); const c = cols.at(ax), r = rows.at(ay); return { r, c, dx: Math.round(ax - cols.pos(c)), dy: Math.round(ay - rows.pos(r)), w: Math.round(w), h: Math.round(ht) }; }
+  const chartDataOf = (ch) => X().chartData(ch, (n, r, c) => { const x = sheetByName(n); return x ? book.value(x, r, c) : null; }, (n, r, c) => { const x = sheetByName(n); return x ? display(x, r, c).text : ""; });
+  function drawCharts() {
+    const list = sh().charts || [];
+    if (chartSel && !list.some((c) => c.id === chartSel)) chartSel = null;
+    const focused = document.activeElement?.closest?.(".ox-chart")?.dataset.id;
+    $charts.replaceChildren(...list.map((ch) => {
+      const b = chartBox(ch.anchor || {});
+      const el = h("div", { class: `ox-chart${chartSel === ch.id ? " on" : ""}`, tabindex: "0", role: "img", "aria-label": `${ch.title || "Chart"} (${(X().CHART_TYPES.find(([t]) => t === ch.type) || [, "Chart"])[1]} chart)`, dataset: { id: ch.id } });
+      el.style.left = `${b.x}px`; el.style.top = `${b.y}px`; el.style.width = `${b.w}px`; el.style.height = `${b.h}px`;
+      el.innerHTML = X().chartSvg(ch, chartDataOf(ch), Math.round(b.w), Math.round(b.h)); // escaped SVG text from sheet-extras.js
+      if (!ctx.readOnly) {
+        el.append(h("span", { class: "ox-chart-size", title: "Drag to resize" }));
+        if (chartSel === ch.id) el.append(h("div", { class: "ox-chart-acts" },
+          h("button", { type: "button", class: "btn btn-sm", onclick: (e) => { e.stopPropagation(); chartPanel(ch.id, el); } }, "Edit chart"),
+          h("button", { type: "button", class: "ox-tool", title: "Delete chart", "aria-label": "Delete chart", onclick: (e) => { e.stopPropagation(); chartSel = null; obj("chart", ch.id, null); focusGrid(); } }, icon("trash"))));
+      }
+      return el;
+    }));
+    if (focused) $charts.querySelector(`[data-id="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  }
+  function selectChart(id) { chartSel = id; drawCharts(); $charts.querySelector(`[data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true }); }
+  $charts.addEventListener("pointerdown", (e) => {
+    const el = e.target.closest(".ox-chart");
+    if (!el) return;
+    e.stopPropagation();
+    if (e.target.closest(".ox-chart-acts")) return;
+    if (editing) commitEdit();
+    const ch = (sh().charts || []).find((x) => x.id === el.dataset.id);
+    if (!ch) return;
+    if (chartSel !== ch.id) selectChart(ch.id);
+    const target = $charts.querySelector(`[data-id="${CSS.escape(ch.id)}"]`);
+    if (ctx.readOnly || (e.button !== 0 && e.pointerType === "mouse")) return;
+    e.preventDefault();
+    const resize = e.target.classList.contains("ox-chart-size");
+    const b0 = chartBox(ch.anchor || {}), x0 = e.clientX, y0 = e.clientY;
+    let moved = false;
+    target.setPointerCapture(e.pointerId);
+    const at = (ev) => ({ dx: ev.clientX - x0, dy: ev.clientY - y0 });
+    const mv = (ev) => {
+      const { dx, dy } = at(ev);
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      if (!moved) return;
+      if (resize) { target.style.width = `${Math.max(160, b0.w + dx)}px`; target.style.height = `${Math.max(110, b0.h + dy)}px`; }
+      else { target.style.left = `${Math.max(0, b0.x + dx)}px`; target.style.top = `${Math.max(0, b0.y + dy)}px`; }
+    };
+    const up = (ev) => {
+      target.removeEventListener("pointermove", mv); target.removeEventListener("pointerup", up); target.removeEventListener("pointercancel", up);
+      if (!moved) return;
+      const { dx, dy } = at(ev);
+      const anchor = resize ? { ...(ch.anchor || {}), w: Math.round(Math.max(160, b0.w + dx)), h: Math.round(Math.max(110, b0.h + dy)) } : anchorAt(Math.max(0, b0.x + dx), Math.max(0, b0.y + dy), b0.w, b0.h);
+      obj("chart", ch.id, { ...dataOf(ch), anchor });
+      $charts.querySelector(`[data-id="${CSS.escape(ch.id)}"]`)?.focus({ preventScroll: true });
+    };
+    target.addEventListener("pointermove", mv); target.addEventListener("pointerup", up); target.addEventListener("pointercancel", up);
+  });
+  $charts.addEventListener("dblclick", (e) => { const el = e.target.closest(".ox-chart"); if (el && !ctx.readOnly) chartPanel(el.dataset.id, el); });
+  $charts.addEventListener("keydown", (e) => {
+    const el = e.target.closest(".ox-chart");
+    if (!el || e.target !== el) return;
+    const ch = (sh().charts || []).find((x) => x.id === el.dataset.id);
+    if (!ch) return;
+    if ((e.key === "Delete" || e.key === "Backspace") && !ctx.readOnly) { e.preventDefault(); chartSel = null; obj("chart", ch.id, null); focusGrid(); }
+    else if (e.key === "Enter" && !ctx.readOnly) { e.preventDefault(); chartPanel(ch.id, el); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); chartSel = null; drawCharts(); focusGrid(); }
+    else if (/^Arrow/.test(e.key) && !ctx.readOnly) {
+      e.preventDefault();
+      const step = e.shiftKey ? 20 : 4, b = chartBox(ch.anchor || {});
+      const x = b.x + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0), y = b.y + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0);
+      obj("chart", ch.id, { ...dataOf(ch), anchor: anchorAt(Math.max(0, x), Math.max(0, y), b.w, b.h) });
+    }
+  });
+  /** The block of cells a chart's data comes from (for showing and changing it). */
+  function chartRange(ch) {
+    const gs = ch.series.flatMap((s) => [s.name, s.cat, s.val]).map((r) => M().parseRef(r)).filter(Boolean);
+    if (!gs.length) return null;
+    const g = { sheet: gs[0].sheet, r1: Math.min(...gs.map((x) => x.r1)), c1: Math.min(...gs.map((x) => x.c1)), r2: Math.max(...gs.map((x) => x.r2)), c2: Math.max(...gs.map((x) => x.c2)) };
+    return g;
+  }
+  const rangeLabel = (g) => (g ? `${g.sheet && g.sheet.toLowerCase() !== sh().name.toLowerCase() ? F().quoteSheet(g.sheet) + "!" : ""}${F().addr(g.r1, g.c1)}:${F().addr(g.r2, g.c2)}` : "");
+  function chartPanel(id, anchorEl) {
+    const cur = () => (sh().charts || []).find((x) => x.id === id);
+    if (!cur()) return;
+    const save = (patch) => { const c = cur(); if (c) obj("chart", id, { ...dataOf(c), ...patch }); };
+    UI().popover(anchorEl, (pop, close) => {
+      const c = cur();
+      const g0 = chartRange(c);
+      const typeSel = UI().select("Chart type", X().CHART_TYPES, (v) => { save({ type: v }); sync(); }, "ox-in");
+      const stackSel = UI().select("Stacking", [["", "Side by side"], ["stacked", "Stacked"], ["percent", "100% stacked"]], (v) => save({ grouping: v || undefined }), "ox-in");
+      const title = h("input", { class: "ox-in", value: c.title || "", "aria-label": "Title", onchange: (e) => save({ title: e.target.value.trim() || undefined }) });
+      const range = h("input", { class: "ox-in", value: rangeLabel(g0), "aria-label": "Data", onchange: () => remake() });
+      const bySel = UI().select("Series in", [["cols", "Columns"], ["rows", "Rows"]], () => remake(), "ox-in");
+      const legend = UI().select("Legend", [["", "Automatic"], ["right", "Right"], ["bottom", "Bottom"], ["none", "None"]], (v) => save({ legend: v || undefined }), "ox-in");
+      const labels = h("input", { type: "checkbox", checked: c.type === "pie" || c.type === "doughnut" ? c.labels !== false : !!c.labels, onchange: (e) => save({ labels: e.target.checked }) });
+      typeSel.value = c.type || "column"; stackSel.value = c.grouping || ""; legend.value = c.legend || "";
+      bySel.value = g0 && c.series[0] && (() => { const v = M().parseRef(c.series[0].val); return v && v.r1 === v.r2 && v.c2 > v.c1 ? "rows" : "cols"; })();
+      const stackRow = h("label", {}, h("span", {}, "Stacking"), stackSel);
+      const sync = () => { stackRow.hidden = ["pie", "doughnut", "scatter"].includes(typeSel.value); };
+      function remake() {
+        const g = M().parseRef(range.value.trim(), sh().name);
+        const src = g && sheetByName(g.sheet || sh().name);
+        if (!g || !src) { ctx.toast("Type the data's cells, like A1:D12."); range.value = rangeLabel(chartRange(cur())); return; }
+        const series = X().seriesFrom(src.name, g, (r, cc) => book.value(src, r, cc), bySel.value === "rows");
+        if (!series.length) { ctx.toast("There are no numbers in those cells to chart."); return; }
+        save({ series });
+      }
+      sync();
+      pop.classList.add("ox-pop-wide");
+      pop.append(h("div", { class: "ox-form" }, h("strong", {}, "Chart"),
+        h("label", {}, h("span", {}, "Type"), typeSel), stackRow,
+        h("label", {}, h("span", {}, "Title"), title),
+        h("label", {}, h("span", {}, "Data"), range),
+        h("label", {}, h("span", {}, "Series in"), bySel),
+        h("label", {}, h("span", {}, "Legend"), legend),
+        h("label", { class: "ox-check" }, labels, h("span", {}, "Show values on the chart")),
+        h("div", { class: "ox-form-btns" }, h("button", { type: "button", class: "btn btn-sm btn-danger", onclick: () => { close(); chartSel = null; obj("chart", id, null); focusGrid(); } }, "Delete chart"), h("button", { type: "button", class: "btn btn-sm btn-primary", onclick: close }, "Done"))));
+    });
+  }
+  function insertChart(type, grouping) {
+    if (ctx.readOnly) return;
+    const g = region(), s = sh();
+    const series = X().seriesFrom(s.name, g, (r, c) => book.value(s, r, c));
+    if (!series.length) { ctx.toast("Select the numbers to chart, with their headings, first."); return; }
+    const id = "ch" + oid();
+    const name = series.length === 1 && series[0].name ? (() => { const x = M().parseRef(series[0].name); return x ? display(s, x.r1, x.c1).text : ""; })() : "";
+    obj("chart", id, { type, ...(grouping ? { grouping } : {}), ...(name ? { title: name } : {}), series, anchor: { r: g.r1, c: g.c2 + 2, dx: 0, dy: 0, w: 480, h: 288 } });
+    scrollTo(g.r1, g.c2 + 2);
+    selectChart(id);
+  }
+  function chartMenu(anchor) {
+    W().popMenu(anchor, [["column", "Column"], ["column", "Stacked column", "stacked"], ["bar", "Bar"], ["line", "Line"], ["area", "Area"], ["pie", "Pie"], ["doughnut", "Doughnut"], ["scatter", "Scatter (X Y)"]]
+      .map(([t, l, g]) => ({ label: l, run: () => insertChart(t, g) })));
+  }
+
+  // Pivot tables: their summary is ordinary cells, worked out again when the definition changes or on Refresh.
+  const pivotAt = (r, c, s = sh()) => (s.pivots || []).find((p) => r >= p.at.r && r < p.at.r + (p.size?.rows || 1) && c >= p.at.c && c < p.at.c + (p.size?.cols || 1));
+  function sourceTable(src) {
+    const g = M().parseRef(src);
+    const s = g && sheetByName(g.sheet);
+    if (!s) return null;
+    const table = [];
+    for (let r = g.r1; r <= Math.min(g.r2, g.r1 + 100000); r++) { const row = []; for (let c = g.c1; c <= g.c2; c++) row.push(book.value(s, r, c)); table.push(row); }
+    return { table, nfOf: (i) => { for (let r = g.r1 + 1; r <= Math.min(g.r2, g.r1 + 50); r++) { const nf = s.cells.get(`${r},${g.c1 + i}`)?.s?.nf; if (nf) return nf; } return null; } };
+  }
+  /** Ops that write pivot $id on sheet $sid from $def (clearing what it covered before). */
+  function pivotOps(sid, id, def, old) {
+    const src = sourceTable(def.src);
+    if (!src) { ctx.toast("The pivot table's source isn't there any more."); return null; }
+    const res = X().pivot(src.table, def, src.nfOf);
+    if (res.error) { ctx.toast(res.error); return null; }
+    const s = wbNow().sheets.find((x) => x.id === sid);
+    const rowsN = res.cells.length, colsN = Math.max(...res.cells.map((r) => r.length));
+    const inOld = (r, c) => old && r >= old.at.r && r < old.at.r + (old.size?.rows || 0) && c >= old.at.c && c < old.at.c + (old.size?.cols || 0);
+    let covers = false;
+    for (let r = def.at.r; r < def.at.r + rowsN && !covers; r++) for (let c = def.at.c; c < def.at.c + colsN; c++) { const x = s.cells.get(`${r},${c}`); if (!inOld(r, c) && x && (x.f || (x.v !== null && x.v !== ""))) { covers = true; break; } }
+    if (covers && !confirm("The pivot table needs cells that have data in them. Replace that data?")) return null;
+    const set = [], style = [];
+    if (old) for (let r = old.at.r; r < old.at.r + (old.size?.rows || 0); r++) for (let c = old.at.c; c < old.at.c + (old.size?.cols || 0); c++) { set.push([r, c, null]); style.push([r, c, { b: null, nf: null }]); }
+    res.cells.forEach((row, i) => row.forEach((x, j) => {
+      const r = def.at.r + i, c = def.at.c + j;
+      set.push([r, c, x.v === null || x.v === undefined || x.v === "" ? null : { v: x.v }]);
+      style.push([r, c, { b: x.b ? true : null, nf: x.nf || null }]);
+    }));
+    return [{ t: "set", sheet: sid, cells: set }, { t: "style", sheet: sid, cells: style }, { t: "obj", sheet: sid, kind: "pivot", id, data: { ...def, size: { rows: rowsN, cols: colsN } } }];
+  }
+  function pivotStart(anchor) {
+    if (ctx.readOnly) return;
+    const inside = pivotAt(sel.r, sel.c);
+    if (inside) { pivotPanel(inside.id, anchor); return; }
+    const g = region(), s = sh();
+    if (g.r2 - g.r1 < 1) { ctx.toast("Select a table with headings in its first row (or click a cell in one) first."); return; }
+    const src = M().refOf(s.name, g.r1, g.c1, g.r2, g.c2);
+    const heads = range(g.c1, g.c2).map((c) => book.value(s, g.r1, c));
+    const firstText = heads.findIndex((_, i) => typeof book.value(s, g.r1 + 1, g.c1 + i) === "string");
+    const firstNum = heads.findIndex((_, i) => isNum(book.value(s, g.r1 + 1, g.c1 + i)));
+    const name = (i) => (heads[i] === null || heads[i] === undefined || heads[i] === "" ? `Column ${i + 1}` : String(heads[i]));
+    const def = { src, at: { r: 0, c: 0 }, rows: firstText >= 0 ? [name(firstText)] : [], cols: [], vals: firstNum >= 0 ? [{ field: name(firstNum), fn: "sum" }] : [{ field: name(0), fn: "count" }] };
+    const sid = "s" + oid(), at = wbNow().sheets.findIndex((x) => x.id === sheetId) + 1;
+    change({ t: "sheet", id: sid, name: "Pivot", at });
+    switchSheet(sid);
+    const id = "pv" + oid();
+    const ops = pivotOps(sid, id, def, null);
+    if (ops) change(ops);
+    select(0, 0);
+    pivotPanel(id, anchor);
+  }
+  function pivotRefresh(id) {
+    const p = (sh().pivots || []).find((x) => x.id === id);
+    if (!p) return;
+    const ops = pivotOps(sheetId, id, dataOf(p), p);
+    if (ops) change(ops);
+  }
+  function pivotPanel(id, anchorEl) {
+    const cur = () => (sh().pivots || []).find((x) => x.id === id);
+    if (!cur()) return;
+    UI().popover(anchorEl, (pop, close) => {
+      pop.classList.add("ox-pop-wide");
+      const body = h("div", { class: "ox-form" });
+      pop.append(body);
+      const update = (patch) => { const p = cur(); if (!p) return; const ops = pivotOps(sheetId, id, { ...dataOf(p), ...patch }, p); if (ops) change(ops); render(); };
+      const render = () => {
+        const p = cur();
+        if (!p) { close(); return; }
+        const src = sourceTable(p.src);
+        const fields = src ? src.table[0].map((v, i) => (v === null || v === undefined || v === "" ? `Column ${i + 1}` : String(v))) : [];
+        const chips = (key) => h("div", { class: "ox-chips" },
+          (p[key] || []).map((f, i) => h("span", { class: "ox-chip" }, f, h("button", { type: "button", "aria-label": `Remove ${f}`, onclick: () => update({ [key]: p[key].filter((_, j) => j !== i) }) }, "×"))),
+          UI().select(`Add to ${key}`, [["", "Add a field…"], ...fields.filter((f) => !(p.rows || []).includes(f) && !(p.cols || []).includes(f)).map((f) => [f, f])], (v) => { if (v) update({ [key]: [...(p[key] || []), v] }); }, "ox-in ox-chip-add"));
+        const vals = h("div", { class: "ox-chips" },
+          (p.vals || []).map((v, i) => {
+            const fn = UI().select("Summarise by", Object.entries(X().PIVOT_FNS).map(([k, l]) => [k, l]), (x) => update({ vals: p.vals.map((w, j) => (j === i ? { ...w, fn: x } : w)) }), "ox-in ox-fn");
+            fn.value = v.fn;
+            return h("span", { class: "ox-chip" }, fn, h("span", {}, ` of ${v.field}`), h("button", { type: "button", "aria-label": `Remove ${v.field}`, onclick: () => update({ vals: p.vals.filter((_, j) => j !== i) }) }, "×"));
+          }),
+          UI().select("Add a value", [["", "Add a field…"], ...fields.map((f) => [f, f])], (v) => { if (v) { const t = src.table.slice(1).find((r) => r[fields.indexOf(v)] !== null)?.[fields.indexOf(v)]; update({ vals: [...(p.vals || []), { field: v, fn: isNum(t) ? "sum" : "count" }] }); } }, "ox-in ox-chip-add"));
+        const srcIn = h("input", { class: "ox-in", value: p.src, "aria-label": "Source", onchange: (e) => { const g = M().parseRef(e.target.value.trim(), sh().name); if (!g || !sheetByName(g.sheet || sh().name)) { ctx.toast("Type the source's cells, like Sales!A1:D200."); e.target.value = p.src; return; } update({ src: M().refOf(sheetByName(g.sheet || sh().name).name, g.r1, g.c1, g.r2, g.c2) }); } });
+        body.replaceChildren(h("strong", {}, "Pivot table"),
+          h("label", {}, h("span", {}, "Source"), srcIn),
+          h("div", { class: "ox-field" }, h("span", {}, "Rows"), chips("rows")),
+          h("div", { class: "ox-field" }, h("span", {}, "Columns"), chips("cols")),
+          h("div", { class: "ox-field" }, h("span", {}, "Values"), vals),
+          h("div", { class: "ox-form-btns" },
+            h("button", { type: "button", class: "btn btn-sm btn-danger", onclick: () => { const q = cur(); if (!q) return; close(); const set = [], style = []; for (let r = q.at.r; r < q.at.r + (q.size?.rows || 0); r++) for (let c = q.at.c; c < q.at.c + (q.size?.cols || 0); c++) { set.push([r, c, null]); style.push([r, c, { b: null, nf: null }]); } change([{ t: "set", sheet: sheetId, cells: set }, { t: "style", sheet: sheetId, cells: style }, { t: "obj", sheet: sheetId, kind: "pivot", id, data: null }]); } }, "Delete"),
+            h("button", { type: "button", class: "btn btn-sm", onclick: () => update({}) }, "Refresh"),
+            h("button", { type: "button", class: "btn btn-sm btn-primary", onclick: close }, "Done")));
+      };
+      render();
+    });
+  }
+
   // ---- start
   axes(); layout(); drawTabs(); draw(true);
   presence();
@@ -1180,6 +1549,7 @@ function mount(host, ctx) {
       const n = norm();
       const area = n.r2 > n.r1 || n.c2 > n.c1 ? n : (() => { const e = M().extent(s); return { r1: 0, c1: 0, r2: e.rows - 1, c2: e.cols - 1 }; })();
       const table = document.createElement("table");
+      const printCf = cfFor(s);
       for (let r = area.r1; r <= area.r2; r++) {
         if (hiddenRows.has(r)) continue;
         const tr = table.insertRow();
@@ -1189,7 +1559,10 @@ function mount(host, ctx) {
           const td = tr.insertCell();
           if (g) { td.rowSpan = g.r2 - g.r1 + 1; td.colSpan = g.c2 - g.c1 + 1; }
           const d = display(s, r, c), st = s.cells.get(`${r},${c}`)?.s || {};
+          const cx = printCf?.at(r, c);
           td.textContent = d.text;
+          if (cx?.bg) td.style.backgroundColor = cx.bg;
+          if (cx?.color) td.style.color = cx.color;
           if (st.b) td.style.fontWeight = "700"; if (st.i) td.style.fontStyle = "italic"; if (st.bg) td.style.backgroundColor = st.bg; if (st.color || d.color) td.style.color = d.color || st.color;
           td.style.textAlign = st.h || (d.num ? "right" : "left");
           if (st.border) for (const [k, side] of [["t", "Top"], ["r", "Right"], ["b", "Bottom"], ["l", "Left"]]) if (st.border[k]) td.style[`border${side}`] = `${st.border[k]}px solid #000`;
@@ -1197,7 +1570,8 @@ function mount(host, ctx) {
       }
       UI().printHtml(`${ctx.file.name} — ${s.name}`, table, "body { font: 10pt Calibri, Carlito, Arial, sans-serif; margin: 0; }\ntable { border-collapse: collapse; }\ntd { padding: 2px 6px; border: 1px solid #ddd; white-space: nowrap; }\n@page { margin: 12mm; }");
     },
-    menu: () => (ctx.readOnly ? [] : [{ label: "Insert rows or columns…", icon: "layers", run: () => rowsMenu(ctx.toolbar) }, { label: "Freeze panes…", icon: "pin", run: () => freezeMenu(ctx.toolbar) }]),
+    menu: () => (ctx.readOnly ? [] : [{ label: "Insert rows or columns…", icon: "layers", run: () => rowsMenu(ctx.toolbar) }, { label: "Freeze panes…", icon: "pin", run: () => freezeMenu(ctx.toolbar) },
+      { label: "Conditional formatting…", icon: "layers", run: () => cfManager(ctx.toolbar) }]),
     escape() { if (editing) { cancelEdit(); return true; } return false; },
     destroy() { ro.disconnect(); },
   };

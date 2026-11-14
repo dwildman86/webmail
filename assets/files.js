@@ -30,7 +30,7 @@ function loadOffice() {
   if (officeLoading) return officeLoading;
   const v = (document.querySelector('script[src*="files.js"]')?.getAttribute("src") || "").split("?v=")[1] || "";
   document.head.append(W().h("link", { rel: "stylesheet", href: `assets/office/office.css?v=${v}` }));
-  const names = ["formula", "ooxml", "collab", "sheet-model", "doc-model", "editor", "text", "sheet", "doc", "templates"];
+  const names = ["formula", "ooxml", "collab", "sheet-model", "sheet-extras", "doc-model", "editor", "text", "sheet", "doc", "templates"];
   // In order (async off), all requested at once.
   officeLoading = Promise.all(names.map((n) => new Promise((ok, bad) => {
     const el = document.createElement("script");

@@ -161,9 +161,13 @@ test("unsupported parts are listed, not lost silently", async () => {
   const wb = workbook();
   const z = await O.unzip(await bytes(await O.writeXlsx(wb, values(wb))));
   z["xl/vbaProject.bin"] = new Uint8Array([1]);
-  z["xl/charts/chart1.xml"] = "<c/>";
+  // A drawing with a picture, and a radar chart: charts of kinds it knows are kept (sheet-extras.test.mjs), these aren't.
+  z["xl/worksheets/_rels/sheet1.xml.rels"] = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>';
+  z["xl/drawings/drawing1.xml"] = '<xdr:wsDr xmlns:xdr="x" xmlns:a="a" xmlns:c="c" xmlns:r="r"><xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:from><xdr:pic/></xdr:twoCellAnchor><xdr:oneCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:row>1</xdr:row></xdr:from><xdr:ext cx="1" cy="1"/><xdr:graphicFrame><a:graphic><a:graphicData><c:chart r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame></xdr:oneCellAnchor></xdr:wsDr>';
+  z["xl/drawings/_rels/drawing1.xml.rels"] = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="t/chart" Target="../charts/chart1.xml"/></Relationships>';
+  z["xl/charts/chart1.xml"] = '<c:chartSpace xmlns:c="c"><c:chart><c:plotArea><c:radarChart><c:ser><c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f></c:numRef></c:val></c:ser></c:radarChart></c:plotArea></c:chart></c:chartSpace>';
   const back = await O.readXlsx(await bytes(await O.zip(z)));
-  assert.deepEqual(back.unsupported.sort(), ["charts", "macros"]);
+  assert.deepEqual(back.unsupported.sort(), ["charts of a kind the editor doesn't know (radar, bubble, stock or surface)", "macros", "pictures and shapes"]);
 });
 
 test("the editors' ids survive saving, so everyone editing agrees on them; files from elsewhere get the same ids for everyone", async () => {

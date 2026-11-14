@@ -3,6 +3,14 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.23.0
+- **Conditional formatting** in spreadsheets: highlight cells greater than, less than, between or equal to a value, text that contains something, dates (this week, last month and so on), duplicates, the top or bottom 10, or above or below average, or use a formula of your own. Data bars, colour scales and icons too. Change each rule's cells and order in Manage rules. Rules open and save with Excel files.
+- **Charts**: column, bar, line, area, pie, doughnut and scatter, made from the selected cells in one click. Stack them, give them a title, choose the legend and show values. Drag to move and resize. They follow the numbers as they change, and they're real Excel charts in the saved file. Charts in Excel files you open can be edited too.
+- **Pivot tables**: summarise a table by rows and columns with sums, counts, averages, maximums and minimums, on a sheet of their own. Change the fields any time, and press Refresh when the data changes. Excel works them out again when it opens the file.
+- Excel files with charts, pivot tables or conditional formatting now open to edit, rather than view-only.
+- **Editing together**: what you type reaches the others while you're still typing, not only when you pause. After a dropped connection, changes are sent as soon as it's back. Share and Version history open in front of the editor rather than behind it.
+- Spreadsheet fixes: currency with red negatives shows its number (not a date) in the formula bar; long text runs on across empty cells at its real width; text no longer shows an apostrophe in the formula bar; and the fill handle can be dragged in the last frozen row.
+
 ## 1.22.1
 - **Security fixes from an audit**: update soon.
 - **Copying from this hosting account's mailboxes**: only administrators can copy any of them. Others can only copy the old mailbox with the same address as a mailbox they read here. Before, anyone signed in could copy a colleague's old email.

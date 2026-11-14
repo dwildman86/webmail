@@ -165,13 +165,287 @@ const BUILTIN_NF = { 0: "General", 1: "0", 2: "0.00", 3: "#,##0", 4: "#,##0.00",
   18: "h:mm AM/PM", 19: "h:mm:ss AM/PM", 20: "h:mm", 21: "h:mm:ss", 22: "dd/mm/yyyy h:mm", 37: "#,##0 ;(#,##0)", 38: "#,##0 ;[Red](#,##0)", 39: "#,##0.00;(#,##0.00)", 40: "#,##0.00;[Red](#,##0.00)", 45: "mm:ss", 46: "[h]:mm:ss", 47: "mm:ss.0", 48: "##0.0E+0", 49: "@" };
 const ref = (a) => { const m = /^([A-Z]+)(\d+)$/i.exec(a); return m ? { r: +m[2] - 1, c: F.colIndex(m[1]) } : null; };
 
+// ------------------------------------------------------------------------------------------------ spreadsheet extras
+
+// Conditional formatting: <conditionalFormatting> rules on the sheet; their formatting in styles.xml (dxfs).
+const CF_OPS = { greaterThan: "gt", lessThan: "lt", greaterThanOrEqual: "ge", lessThanOrEqual: "le", equal: "eq", notEqual: "ne", between: "between", notBetween: "notBetween" };
+const CF_OPS_X = Object.fromEntries(Object.entries(CF_OPS).map(([k, v]) => [v, k]));
+const sqrefRanges = (s) => String(s || "").split(/\s+/).filter(Boolean).map((p) => { const [a, b] = p.split(":").map(ref); return a && { r1: Math.min(a.r, (b || a).r), c1: Math.min(a.c, (b || a).c), r2: Math.max(a.r, (b || a).r), c2: Math.max(a.c, (b || a).c) }; }).filter(Boolean);
+const rangeText = (g) => (g.r1 === g.r2 && g.c1 === g.c2 ? F.addr(g.r1, g.c1) : `${F.addr(g.r1, g.c1)}:${F.addr(g.r2, g.c2)}`);
+const cfvoOf = (el) => ({ kind: { min: "min", max: "max", num: "num", percent: "percent", percentile: "percentile", formula: "num" }[attr(el, "type")] || "min", ...(attr(el, "val") !== undefined ? { val: attr(el, "val") } : {}) });
+const on = (el, name) => !!kid(el, name) && !["0", "false"].includes(attr(kid(el, name), "val"));
+function readDxfs(st) {
+  return kids(kid(st, "dxfs"), "dxf").map((d) => {
+    const s = {};
+    const f = kid(d, "font");
+    if (f) { if (on(f, "b")) s.b = true; if (on(f, "i")) s.i = true; if (kid(f, "u") && attr(kid(f, "u"), "val") !== "none") s.u = true; if (on(f, "strike")) s.s = true; const c = color(kid(f, "color")); if (c) s.color = c; }
+    const p = kid(kid(d, "fill"), "patternFill");
+    if (p) { const c = color(kid(p, "bgColor")) || color(kid(p, "fgColor")); if (c) s.bg = c; }
+    return s;
+  });
+}
+function readCf(x, dxfs, unsupported) {
+  const out = [];
+  const TEXT = { containsText: "contains", notContainsText: "notContains", beginsWith: "begins", endsWith: "ends" };
+  for (const cf of kids(x, "conditionalFormatting")) {
+    const ranges = sqrefRanges(cf.attrs.sqref);
+    if (!ranges.length) continue;
+    for (const r of kids(cf, "cfRule")) {
+      const t = r.attrs.type, fs = kids(r, "formula").map(textOf);
+      let rule = null;
+      if (t === "cellIs" && CF_OPS[r.attrs.operator]) rule = { type: "cell", op: CF_OPS[r.attrs.operator], a: fs[0] ?? "0", ...(fs[1] !== undefined ? { b: fs[1] } : {}) };
+      else if (TEXT[t]) rule = { type: "text", op: TEXT[t], text: r.attrs.text ?? "" };
+      else if (t === "top10") rule = { type: "top", n: +(r.attrs.rank || 10), percent: r.attrs.percent === "1", bottom: r.attrs.bottom === "1" };
+      else if (t === "aboveAverage") rule = { type: "avg", below: r.attrs.aboveAverage === "0", equal: r.attrs.equalAverage === "1", ...(r.attrs.stdDev ? { std: +r.attrs.stdDev } : {}) };
+      else if (t === "duplicateValues" || t === "uniqueValues") rule = { type: "dup", unique: t === "uniqueValues" };
+      else if (t === "containsBlanks" || t === "notContainsBlanks") rule = { type: "blank", not: t === "notContainsBlanks" };
+      else if (t === "containsErrors" || t === "notContainsErrors") rule = { type: "error", not: t === "notContainsErrors" };
+      else if (t === "timePeriod" && r.attrs.timePeriod) rule = { type: "date", period: r.attrs.timePeriod };
+      else if (t === "expression" && fs[0]) rule = { type: "expr", f: fs[0] };
+      else if (t === "colorScale") { const cs = kid(r, "colorScale"); const cols = kids(cs, "color").map(color); rule = { type: "scale", stops: kids(cs, "cfvo").map((e, i) => ({ ...cfvoOf(e), color: cols[i] || "#ffffff" })) }; }
+      else if (t === "dataBar") { const db = kid(r, "dataBar"); const v = kids(db, "cfvo").map(cfvoOf); rule = { type: "bar", color: color(kid(db, "color")) || "#638ec6", min: v[0], max: v[1] }; }
+      else if (t === "iconSet") { const is = kid(r, "iconSet"); rule = { type: "icons", set: attr(is, "iconSet") || "3TrafficLights1", reverse: attr(is, "reverse") === "1", hideValue: attr(is, "showValue") === "0", stops: kids(is, "cfvo").slice(1).map((e) => ({ ...cfvoOf(e), ...(attr(e, "gte") === "0" ? { gt: true } : {}) })) }; }
+      if (!rule) { unsupported.add("conditional formatting of a kind the editor doesn't know"); continue; }
+      out.push({ id: `cf${out.length + 1}`, ranges, pri: +(r.attrs.priority || out.length + 1), ...(r.attrs.stopIfTrue === "1" ? { stop: true } : {}), rule, style: r.attrs.dxfId !== undefined ? { ...(dxfs[+r.attrs.dxfId] || {}) } : {} });
+    }
+  }
+  return out.sort((a, b) => a.pri - b.pri);
+}
+const PERIOD_F = {
+  today: "FLOOR(@,1)=TODAY()", yesterday: "FLOOR(@,1)=TODAY()-1", tomorrow: "FLOOR(@,1)=TODAY()+1", last7Days: "AND(TODAY()-FLOOR(@,1)<=6,FLOOR(@,1)<=TODAY())",
+  thisWeek: "AND(TODAY()-ROUNDDOWN(@,0)<=WEEKDAY(TODAY())-1,ROUNDDOWN(@,0)-TODAY()<=7-WEEKDAY(TODAY()))", lastWeek: "AND(TODAY()-ROUNDDOWN(@,0)>=(WEEKDAY(TODAY())),TODAY()-ROUNDDOWN(@,0)<(WEEKDAY(TODAY())+7))",
+  nextWeek: "AND(ROUNDDOWN(@,0)-TODAY()>(7-WEEKDAY(TODAY())),ROUNDDOWN(@,0)-TODAY()<(15-WEEKDAY(TODAY())))",
+  thisMonth: "AND(MONTH(@)=MONTH(TODAY()),YEAR(@)=YEAR(TODAY()))", lastMonth: "AND(MONTH(@)=MONTH(EDATE(TODAY(),0-1)),YEAR(@)=YEAR(EDATE(TODAY(),0-1)))", nextMonth: "AND(MONTH(@)=MONTH(EDATE(TODAY(),0+1)),YEAR(@)=YEAR(EDATE(TODAY(),0+1)))",
+};
+function writeCf(sh, dxfId, nextPri) {
+  let xml = "";
+  for (const o of sh.cf || []) {
+    const R = o.rule, tl = F.addr(Math.min(...o.ranges.map((g) => g.r1)), Math.min(...o.ranges.map((g) => g.c1)));
+    const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
+    const fx = (s) => `<formula>${esc(s)}</formula>`;
+    const dx = () => ` dxfId="${dxfId(o.style || {})}"`;
+    const pri = nextPri();
+    const head = (type, extra = "") => `<cfRule type="${type}"${extra} priority="${pri}"${o.stop ? ' stopIfTrue="1"' : ""}`;
+    const cfvo = (p) => `<cfvo type="${p?.kind || "min"}"${p && p.val !== undefined && !["min", "max"].includes(p.kind) ? ` val="${esc(p.val)}"` : ""}${p?.gt ? ' gte="0"' : ""}/>`;
+    let rule = "";
+    switch (R.type) {
+      case "cell": rule = `${head("cellIs", dx() + ` operator="${CF_OPS_X[R.op] || "equal"}"`)}>${fx(R.a ?? "0")}${/between/i.test(R.op) ? fx(R.b ?? "0") : ""}</cfRule>`; break;
+      case "text": {
+        const t = q(R.text ?? "");
+        const [type, op, f] = { contains: ["containsText", "containsText", `NOT(ISERROR(SEARCH(${t},${tl})))`], notContains: ["notContainsText", "notContains", `ISERROR(SEARCH(${t},${tl}))`], begins: ["beginsWith", "beginsWith", `LEFT(${tl},LEN(${t}))=${t}`], ends: ["endsWith", "endsWith", `RIGHT(${tl},LEN(${t}))=${t}`] }[R.op] || [];
+        if (type) rule = `${head(type, dx() + ` operator="${op}" text="${esc(R.text ?? "")}"`)}>${fx(f)}</cfRule>`;
+        break;
+      }
+      case "top": rule = `${head("top10", dx())}${R.percent ? ' percent="1"' : ""}${R.bottom ? ' bottom="1"' : ""} rank="${Math.max(1, +R.n || 10)}"/>`; break;
+      case "avg": rule = `${head("aboveAverage", dx())}${R.below ? ' aboveAverage="0"' : ""}${R.equal ? ' equalAverage="1"' : ""}${R.std ? ` stdDev="${+R.std}"` : ""}/>`; break;
+      case "dup": rule = `${head(R.unique ? "uniqueValues" : "duplicateValues", dx())}/>`; break;
+      case "blank": rule = `${head(R.not ? "notContainsBlanks" : "containsBlanks", dx())}>${fx(R.not ? `LEN(TRIM(${tl}))>0` : `LEN(TRIM(${tl}))=0`)}</cfRule>`; break;
+      case "error": rule = `${head(R.not ? "notContainsErrors" : "containsErrors", dx())}>${fx(R.not ? `NOT(ISERROR(${tl}))` : `ISERROR(${tl})`)}</cfRule>`; break;
+      case "date": if (PERIOD_F[R.period]) rule = `${head("timePeriod", dx() + ` timePeriod="${R.period}"`)}>${fx(PERIOD_F[R.period].replace(/@/g, tl))}</cfRule>`; break;
+      case "expr": rule = `${head("expression", dx())}>${fx(R.f || "FALSE")}</cfRule>`; break;
+      case "scale": { const st = R.stops?.length >= 2 ? R.stops : [{ kind: "min", color: "#f8696b" }, { kind: "max", color: "#63be7b" }]; rule = `${head("colorScale")}><colorScale>${st.map(cfvo).join("")}${st.map((s) => `<color rgb="FF${hex(s.color)}"/>`).join("")}</colorScale></cfRule>`; break; }
+      case "bar": rule = `${head("dataBar")}><dataBar>${cfvo(R.min || { kind: "min" })}${cfvo(R.max || { kind: "max" })}<color rgb="FF${hex(R.color || "#638ec6")}"/></dataBar></cfRule>`; break;
+      case "icons": { const n = +String(R.set || "3").charAt(0) || 3; const stops = R.stops?.length === n - 1 ? R.stops : Array.from({ length: n - 1 }, (_, i) => ({ kind: "percent", val: Math.round(((i + 1) * 100) / n) })); rule = `${head("iconSet")}><iconSet iconSet="${esc(R.set || "3TrafficLights1")}"${R.hideValue ? ' showValue="0"' : ""}${R.reverse ? ' reverse="1"' : ""}><cfvo type="percent" val="0"/>${stops.map(cfvo).join("")}</iconSet></cfRule>`; break; }
+    }
+    if (rule) xml += `<conditionalFormatting sqref="${o.ranges.map(rangeText).join(" ")}">${rule}</conditionalFormatting>`;
+  }
+  return xml;
+}
+const dxfXml = (s) => {
+  const font = `${s.b ? "<b/>" : ""}${s.i ? "<i/>" : ""}${s.s ? "<strike/>" : ""}${s.u ? "<u/>" : ""}${s.color ? `<color rgb="FF${hex(s.color)}"/>` : ""}`;
+  return `<dxf>${font ? `<font>${font}</font>` : ""}${s.bg ? `<fill><patternFill patternType="solid"><bgColor rgb="FF${hex(s.bg)}"/></patternFill></fill>` : ""}</dxf>`;
+};
+
+// Charts: a drawing part per sheet, with a chart part for each chart (DrawingML charts).
+const EMU = 9525; // per pixel
+const DEF_COL_PX = 96, DEF_ROW_PX = 22; // the editor's default column width and row height
+const KIND_OF = { barChart: "bar", bar3DChart: "bar", lineChart: "line", line3DChart: "line", areaChart: "area", area3DChart: "area", pieChart: "pie", pie3DChart: "pie", ofPieChart: "pie", doughnutChart: "doughnut", scatterChart: "scatter" };
+const refText = (el) => textOf(kid(el, "f")).trim() || null;
+function readChart(xml, unsupported) {
+  const cs = parseXml(xml);
+  const chart = kid(cs, "chart"), plot = kid(chart, "plotArea");
+  const kinds = kids(plot).filter((k) => /Chart$/.test(local(k.name)));
+  if (!kinds.length) return null;
+  const known = kinds.filter((k) => KIND_OF[local(k.name)]);
+  if (known.length !== kinds.length) unsupported.add("charts of a kind the editor doesn't know (radar, bubble, stock or surface)");
+  if (kinds.length > 1) unsupported.add("combination charts");
+  if (!known.length) return null;
+  const k0 = known[0], kn = local(k0.name);
+  let type = KIND_OF[kn];
+  if (type === "bar" && attr(kid(k0, "barDir"), "val") !== "bar") type = "column";
+  const g = attr(kid(k0, "grouping"), "val");
+  const out = { type, series: [] };
+  if (g === "stacked" || g === "percentStacked") out.grouping = g === "stacked" ? "stacked" : "percent";
+  for (const k of known) for (const s of kids(k, "ser")) {
+    const tx = kid(s, "tx");
+    let name = null;
+    if (tx) { const sr = kid(tx, "strRef"); name = sr ? refText(sr) : kid(tx, "v") ? `"${textOf(kid(tx, "v")).replace(/"/g, '""')}"` : null; }
+    const src = (el) => { if (!el) return null; const r = kid(el, "numRef") || kid(el, "strRef") || kid(el, "multiLvlStrRef"); return r ? refText(r) : null; };
+    const val = src(kid(s, "val") || kid(s, "yVal")), cat = src(kid(s, "cat") || kid(s, "xVal"));
+    if (!val) { unsupported.add("charts of numbers typed into the chart"); continue; }
+    out.series.push({ name, cat, val });
+  }
+  const title = kid(chart, "title");
+  if (title) { const t = deep(title, "t").map(textOf).join(""); const sr = deep(title, "strRef")[0]; out.title = t || (sr ? "" : "Chart title"); }
+  const lg = kid(chart, "legend");
+  out.legend = !lg ? "none" : attr(kid(lg, "legendPos"), "val") === "b" || attr(kid(lg, "legendPos"), "val") === "t" ? "bottom" : "right";
+  const dl = deep(plot, "dLbls")[0];
+  if (dl && (on(dl, "showVal") || on(dl, "showPercent"))) out.labels = true; else if (type === "pie" || type === "doughnut") out.labels = false;
+  return out.series.length ? out : null;
+}
+function readDrawing(files, path, sheet, unsupported) {
+  const x = parseXml(files[path]);
+  const rels = relsOf(files, path);
+  const px = (list, i, def) => list[i] ?? def;
+  const charts = [];
+  for (const a of kids(x).filter((k) => /Anchor$/.test(local(k.name)))) {
+    const frame = kid(a, "graphicFrame");
+    const cref = frame && deep(frame, "chart")[0];
+    if (!cref) { unsupported.add("pictures and shapes"); continue; }
+    const target = rels[attr(cref, "id")]?.target;
+    if (!target || !files[target]) continue;
+    const ch = readChart(files[target], unsupported);
+    if (!ch) continue;
+    const from = kid(a, "from"), num = (el, n) => +(textOf(kid(el, n)) || 0);
+    let anchor;
+    if (from) {
+      const r = num(from, "row"), c = num(from, "col"), dx = Math.round(num(from, "colOff") / EMU), dy = Math.round(num(from, "rowOff") / EMU);
+      let w = 480, h = 288;
+      const ext = kid(a, "ext");
+      const to = kid(a, "to");
+      if (ext) { w = Math.round(+ext.attrs.cx / EMU); h = Math.round(+ext.attrs.cy / EMU); }
+      else if (to) {
+        const tr = num(to, "row"), tc = num(to, "col");
+        w = -dx + Math.round(num(to, "colOff") / EMU); for (let i = c; i < tc; i++) w += px(sheet.cols, i, DEF_COL_PX);
+        h = -dy + Math.round(num(to, "rowOff") / EMU); for (let i = r; i < tr; i++) h += px(sheet.rows, i, DEF_ROW_PX);
+      }
+      anchor = { r, c, dx, dy, w: Math.max(80, w), h: Math.max(60, h) };
+    } else anchor = { r: 1, c: 1, dx: 0, dy: 0, w: 480, h: 288 };
+    charts.push({ id: `ch${charts.length + 1}`, ...ch, anchor });
+  }
+  return charts;
+}
+const C_NS = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+const CHART_COLORS = ["4472C4", "ED7D31", "A5A5A5", "FFC000", "5B9BD5", "70AD47", "264478", "9E480E", "636363", "997300", "255E91", "43682B"];
+/** A chart part. $cache(ref) → [{ v, text }] for each cell in the ref (the values Excel shows before it recalculates). */
+function chartXml(ch, cache) {
+  const type = ch.type || "column", pie = type === "pie" || type === "doughnut", scatter = type === "scatter";
+  const grouping = ch.grouping === "stacked" ? "stacked" : ch.grouping === "percent" ? "percentStacked" : null;
+  const str = (ref) => { const pts = cache(ref); return `<c:strRef><c:f>${esc(ref)}</c:f><c:strCache><c:ptCount val="${pts.length}"/>${pts.map((p, i) => `<c:pt idx="${i}"><c:v>${esc(p.text)}</c:v></c:pt>`).join("")}</c:strCache></c:strRef>`; };
+  const num = (ref) => { const pts = cache(ref); return `<c:numRef><c:f>${esc(ref)}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${pts.length}"/>${pts.map((p, i) => (typeof p.v === "number" && Number.isFinite(p.v) ? `<c:pt idx="${i}"><c:v>${p.v}</c:v></c:pt>` : "")).join("")}</c:numCache></c:numRef>`; };
+  const fill = (i) => (ch.colors?.[i] ? hex(ch.colors[i]) : CHART_COLORS[i % CHART_COLORS.length]);
+  const sers = ch.series.map((s, i) => {
+    const tx = !s.name ? "" : s.name[0] === '"' ? `<c:tx><c:v>${esc(s.name.slice(1, -1).replace(/""/g, '"'))}</c:v></c:tx>` : `<c:tx>${str(s.name)}</c:tx>`;
+    const n = pie ? cache(s.val).length : 0;
+    const sp = pie ? Array.from({ length: n }, (_, k) => `<c:dPt><c:idx val="${k}"/><c:bubble3D val="0"/><c:spPr><a:solidFill><a:srgbClr val="${fill(k)}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></a:ln></c:spPr></c:dPt>`).join("") : type === "line" ? `<c:spPr><a:ln w="28575" cap="rnd"><a:solidFill><a:srgbClr val="${fill(i)}"/></a:solidFill><a:round/></a:ln></c:spPr><c:marker><c:symbol val="circle"/><c:size val="5"/></c:marker>`
+      : scatter ? `<c:spPr><a:ln w="19050"><a:noFill/></a:ln></c:spPr><c:marker><c:symbol val="circle"/><c:size val="6"/><c:spPr><a:solidFill><a:srgbClr val="${fill(i)}"/></a:solidFill></c:spPr></c:marker>`
+      : `<c:spPr><a:solidFill><a:srgbClr val="${fill(i)}"/></a:solidFill></c:spPr>${type === "column" || type === "bar" ? '<c:invertIfNegative val="0"/>' : ""}`;
+    const cat = s.cat ? (scatter ? `<c:xVal>${num(s.cat)}</c:xVal>` : `<c:cat>${cache(s.cat).every((p) => typeof p.v === "number") ? num(s.cat) : str(s.cat)}</c:cat>`) : "";
+    const val = scatter ? `<c:yVal>${num(s.val)}</c:yVal>` : `<c:val>${num(s.val)}</c:val>`;
+    return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${sp}${cat}${val}${type === "line" || scatter ? '<c:smooth val="0"/>' : ""}</c:ser>`;
+  }).join("");
+  const labels = pie ? ch.labels !== false : !!ch.labels;
+  const dl = labels ? `<c:dLbls><c:showLegendKey val="0"/><c:showVal val="${pie ? 0 : 1}"/><c:showCatName val="0"/><c:showSerName val="0"/><c:showPercent val="${pie ? 1 : 0}"/><c:showBubbleSize val="0"/></c:dLbls>` : "";
+  const ax = '<c:axId val="500000001"/><c:axId val="500000002"/>';
+  let body;
+  if (type === "column" || type === "bar") body = `<c:barChart><c:barDir val="${type === "bar" ? "bar" : "col"}"/><c:grouping val="${grouping || "clustered"}"/><c:varyColors val="0"/>${sers}${dl}<c:gapWidth val="150"/>${grouping ? '<c:overlap val="100"/>' : ""}${ax}</c:barChart>`;
+  else if (type === "line") body = `<c:lineChart><c:grouping val="${grouping || "standard"}"/><c:varyColors val="0"/>${sers}${dl}<c:marker val="1"/>${ax}</c:lineChart>`;
+  else if (type === "area") body = `<c:areaChart><c:grouping val="${grouping || "standard"}"/><c:varyColors val="0"/>${sers}${dl}${ax}</c:areaChart>`;
+  else if (type === "pie") body = `<c:pieChart><c:varyColors val="1"/>${sers}${dl}<c:firstSliceAng val="0"/></c:pieChart>`;
+  else if (type === "doughnut") body = `<c:doughnutChart><c:varyColors val="1"/>${sers}${dl}<c:firstSliceAng val="0"/><c:holeSize val="50"/></c:doughnutChart>`;
+  else body = `<c:scatterChart><c:scatterStyle val="lineMarker"/><c:varyColors val="0"/>${sers}${dl}${ax}</c:scatterChart>`;
+  const axis = (tag, id, cross, pos, extra) => `<c:${tag}><c:axId val="${id}"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="${pos}"/>${tag === "valAx" && extra !== "x" ? "<c:majorGridlines/>" : ""}<c:numFmt formatCode="General" sourceLinked="1"/><c:majorTickMark val="none"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="${cross}"/><c:crosses val="autoZero"/>${tag === "catAx" ? '<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/>' : `<c:crossBetween val="${scatter ? "midCat" : "between"}"/>`}</c:${tag}>`;
+  const axes = pie ? "" : scatter ? axis("valAx", 500000001, 500000002, "b", "x") + axis("valAx", 500000002, 500000001, "l") : axis("catAx", 500000001, 500000002, type === "bar" ? "l" : "b") + axis("valAx", 500000002, 500000001, type === "bar" ? "b" : "l");
+  const title = ch.title ? `<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1400" b="0"/></a:pPr><a:r><a:rPr lang="en-GB" sz="1400" b="0"/><a:t>${esc(ch.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>` : '<c:autoTitleDeleted val="1"/>';
+  const legendOn = ch.legend === "none" ? false : ch.legend === "right" || ch.legend === "bottom" || pie || ch.series.length > 1;
+  const legend = legendOn ? `<c:legend><c:legendPos val="${ch.legend === "bottom" ? "b" : "r"}"/><c:overlay val="0"/></c:legend>` : "";
+  return XML_HEAD + `<c:chartSpace ${C_NS}><c:roundedCorners val="0"/><c:chart>${title}<c:plotArea><c:layout/>${body}${axes}</c:plotArea>${legend}<c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:ln><a:noFill/></a:ln></c:spPr></c:chartSpace>`;
+}
+function drawingXml(charts, firstRel) {
+  return XML_HEAD + `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${charts.map((ch, i) => {
+    const a = ch.anchor || { r: 1, c: 1, dx: 0, dy: 0, w: 480, h: 288 };
+    return `<xdr:oneCellAnchor><xdr:from><xdr:col>${a.c}</xdr:col><xdr:colOff>${Math.round((a.dx || 0) * EMU)}</xdr:colOff><xdr:row>${a.r}</xdr:row><xdr:rowOff>${Math.round((a.dy || 0) * EMU)}</xdr:rowOff></xdr:from><xdr:ext cx="${Math.round(a.w * EMU)}" cy="${Math.round(a.h * EMU)}"/><xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${i + 2}" name="Chart ${i + 1}"${ch.title ? ` descr="${esc(ch.title)}"` : ""}/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId${firstRel + i}"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:oneCellAnchor>`;
+  }).join("")}</xdr:wsDr>`;
+}
+
+// Pivot tables: the summary is ordinary cells (the editor works it out); Excel gets a pivot cache and table definition
+// pointing at the source, set to refresh when the file opens.
+const PIVOT_FN = { sum: "sum", count: "count", average: "average", max: "max", min: "min" };
+function readPivot(files, path, unsupported) {
+  const x = parseXml(files[path]);
+  const rels = relsOf(files, path);
+  const cachePath = Object.values(rels).find((r) => r.type === "pivotCacheDefinition")?.target;
+  if (!cachePath || !files[cachePath]) return null;
+  const cache = parseXml(files[cachePath]);
+  const ws = deep(cache, "worksheetSource")[0];
+  if (!ws || !ws.attrs.ref || !ws.attrs.sheet) { unsupported.add("pivot tables from named ranges or other files"); return null; }
+  const g = sqrefRanges(ws.attrs.ref)[0];
+  if (!g) return null;
+  const names = kids(kid(cache, "cacheFields"), "cacheField").map((f) => f.attrs.name);
+  if (kids(kid(cache, "cacheFields"), "cacheField").some((f) => f.attrs.formula || kid(f, "fieldGroup"))) unsupported.add("pivot table calculated or grouped fields");
+  if (kid(x, "pageFields")) unsupported.add("pivot table filters");
+  const fields = (tag) => kids(kid(x, tag), "field").map((f) => +f.attrs.x).filter((i) => i >= 0 && names[i] !== undefined).map((i) => names[i]);
+  const loc = sqrefRanges(attr(kid(x, "location"), "ref"))[0];
+  if (!loc) return null;
+  const vals = kids(kid(x, "dataFields"), "dataField").map((d) => ({ field: names[+d.attrs.fld], fn: PIVOT_FN[d.attrs.subtotal || "sum"] || (unsupported.add("pivot table value fields other than sum, count, average, max and min"), "sum") })).filter((v) => v.field !== undefined);
+  return { src: `${F.quoteSheet(ws.attrs.sheet)}!$${F.colName(g.c1)}$${g.r1 + 1}:$${F.colName(g.c2)}$${g.r2 + 1}`, at: { r: loc.r1, c: loc.c1 }, rows: fields("rowFields"), cols: fields("colFields"), vals, size: { rows: loc.r2 - loc.r1 + 1, cols: loc.c2 - loc.c1 + 1 }, name: x.attrs.name };
+}
+/** The cache definition and table definition for a pivot. $table: the source's rows (first: names). */
+function pivotXml(p, table, srcRef, cacheId, name) {
+  const names = (table[0] || []).map((v, i) => (v === null || v === undefined || v === "" ? `Column ${i + 1}` : String(v)));
+  const idx = (f) => names.findIndex((n) => n.toLowerCase() === String(f).toLowerCase());
+  const rowI = (p.rows || []).map(idx).filter((i) => i >= 0), colI = (p.cols || []).map(idx).filter((i) => i >= 0);
+  const vals = (p.vals || []).map((v) => ({ ...v, i: idx(v.field) })).filter((v) => v.i >= 0);
+  const axis = new Set([...rowI, ...colI]);
+  const data = table.slice(1);
+  const items = names.map((_, i) => {
+    if (!axis.has(i)) return null;
+    const seen = new Map();
+    for (const row of data) { const v = row[i]; const k = v === null || v === undefined || v === "" ? "\u0000" : typeof v + ":" + v; if (!seen.has(k)) seen.set(k, v); }
+    return [...seen.values()];
+  });
+  const fieldXml = names.map((n, i) => {
+    const col = data.map((r) => r[i]);
+    if (items[i]) {
+      const its = items[i];
+      const hasBlank = its.some((v) => v === null || v === undefined || v === "");
+      const allNum = its.every((v) => typeof v === "number" || v === null || v === undefined || v === "");
+      const shared = its.map((v) => (v === null || v === undefined || v === "" ? "<m/>" : typeof v === "number" ? `<n v="${v}"/>` : typeof v === "boolean" ? `<b v="${v ? 1 : 0}"/>` : `<s v="${esc(v)}"/>`)).join("");
+      return `<cacheField name="${esc(n)}" numFmtId="0"><sharedItems${hasBlank ? ' containsBlank="1"' : ""}${allNum ? ' containsSemiMixedTypes="0" containsString="0" containsNumber="1"' : ""} count="${its.length}">${shared}</sharedItems></cacheField>`;
+    }
+    const nums = col.filter((v) => typeof v === "number");
+    const strs = col.some((v) => typeof v === "string");
+    return `<cacheField name="${esc(n)}" numFmtId="0"><sharedItems${!strs ? ' containsSemiMixedTypes="0" containsString="0"' : ""}${nums.length ? ` containsNumber="1" minValue="${Math.min(...nums)}" maxValue="${Math.max(...nums)}"` : ""}${col.some((v) => v === null || v === undefined || v === "") ? ' containsBlank="1"' : ""}/></cacheField>`;
+  }).join("");
+  const sheetName = srcRef.sheet, ref = `${F.addr(srcRef.r1, srcRef.c1)}:${F.addr(srcRef.r2, srcRef.c2)}`;
+  const cacheDef = XML_HEAD + `<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" saveData="0" refreshOnLoad="1" createdVersion="6" refreshedVersion="6" minRefreshableVersion="3" recordCount="${data.length}"><cacheSource type="worksheet"><worksheetSource ref="${ref}" sheet="${esc(sheetName)}"/></cacheSource><cacheFields count="${names.length}">${fieldXml}</cacheFields></pivotCacheDefinition>`;
+  const dataIx = new Set(vals.map((v) => v.i));
+  const pf = names.map((_, i) => {
+    const ax = rowI.includes(i) ? ' axis="axisRow"' : colI.includes(i) ? ' axis="axisCol"' : "";
+    const df = dataIx.has(i) ? ' dataField="1"' : "";
+    return items[i] ? `<pivotField${ax}${df} showAll="0"><items count="${items[i].length + 1}">${items[i].map((_, k) => `<item x="${k}"/>`).join("")}<item t="default"/></items></pivotField>` : `<pivotField${df} showAll="0"/>`;
+  }).join("");
+  const colFields = [...colI, ...(vals.length > 1 ? [-2] : [])];
+  const size = p.size || { rows: 2, cols: 2 };
+  const loc = `${F.addr(p.at.r, p.at.c)}:${F.addr(p.at.r + Math.max(1, size.rows) - 1, p.at.c + Math.max(1, size.cols) - 1)}`;
+  const FN = { sum: "Sum", count: "Count", average: "Average", max: "Max", min: "Min" };
+  const table2 = XML_HEAD + `<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="${esc(name)}" cacheId="${cacheId}" applyNumberFormats="0" applyBorderFormats="0" applyFontFormats="0" applyPatternFormats="0" applyAlignmentFormats="0" applyWidthHeightFormats="1" dataCaption="Values" updatedVersion="6" minRefreshableVersion="3" useAutoFormatting="1" itemPrintTitles="1" createdVersion="6" indent="0" outline="1" outlineData="1" multipleFieldFilters="0"><location ref="${loc}" firstHeaderRow="1" firstDataRow="${colI.length ? 2 : 1}" firstDataCol="${Math.max(1, rowI.length)}"/><pivotFields count="${names.length}">${pf}</pivotFields>${rowI.length ? `<rowFields count="${rowI.length}">${rowI.map((i) => `<field x="${i}"/>`).join("")}</rowFields>` : ""}${colFields.length ? `<colFields count="${colFields.length}">${colFields.map((i) => `<field x="${i}"/>`).join("")}</colFields>` : ""}${vals.length ? `<dataFields count="${vals.length}">${vals.map((v) => `<dataField name="${esc(`${FN[v.fn] || "Sum"} of ${names[v.i]}`)}" fld="${v.i}"${v.fn && v.fn !== "sum" ? ` subtotal="${v.fn}"` : ""} baseField="0" baseItem="0"/>`).join("")}</dataFields>` : ""}<pivotTableStyleInfo name="PivotStyleLight16" showRowHeaders="1" showColHeaders="1" showRowStripes="0" showColStripes="0" showLastColumn="1"/></pivotTableDefinition>`;
+  return { cacheDef, table: table2 };
+}
+/** A sheet-qualified range ("Sheet1!$A$1:$D$9") as { sheet, r1, c1, r2, c2 }. */
+function rangeRef(text) {
+  let toks;
+  try { toks = F.tokenize(String(text || "").replace(/^=/, "")); } catch { return null; }
+  const t = toks.find((x) => x.t === "ref" || x.t === "range");
+  if (!t || !t.v.sheet) return null;
+  const v = t.v;
+  return t.t === "ref" ? { sheet: v.sheet, r1: v.r, c1: v.c, r2: v.r, c2: v.c } : { sheet: v.sheet, r1: Math.min(v.r1, v.r2), c1: Math.min(v.c1, v.c2), r2: Math.max(v.r1, v.r2), c2: Math.max(v.c1, v.c2) };
+}
+
 async function readXlsx(bytes) {
   const files = await unzip(bytes);
   const unsupported = new Set();
   if (files["xl/vbaProject.bin"]) unsupported.add("macros");
-  if (Object.keys(files).some((n) => n.startsWith("xl/pivotTables/"))) unsupported.add("pivot tables");
-  if (Object.keys(files).some((n) => n.startsWith("xl/charts/"))) unsupported.add("charts");
-  if (Object.keys(files).some((n) => n.startsWith("xl/drawings/"))) unsupported.add("pictures and shapes");
   const wbXml = parseXml(files["xl/workbook.xml"] || "");
   const rels = relsOf(files, "xl/workbook.xml");
   const strings = files["xl/sharedStrings.xml"] ? kids(parseXml(files["xl/sharedStrings.xml"]), "si").map((si) => deep(si, "t").filter((t) => !deep(si, "rPh").some((ph) => deep(ph, "t").includes(t))).map(textOf).join("")) : [];
@@ -179,6 +453,7 @@ async function readXlsx(bytes) {
   const st = files["xl/styles.xml"] ? parseXml(files["xl/styles.xml"]) : null;
   const numFmts = { ...BUILTIN_NF };
   for (const n of kids(kid(st, "numFmts"), "numFmt")) numFmts[+n.attrs.numFmtId] = n.attrs.formatCode;
+  const dxfs = readDxfs(st);
   const fonts = kids(kid(st, "fonts"), "font").map((f) => ({ b: !!kid(f, "b") && attr(kid(f, "b"), "val") !== "0", i: !!kid(f, "i") && attr(kid(f, "i"), "val") !== "0", u: !!kid(f, "u") && attr(kid(f, "u"), "val") !== "none",
     s: !!kid(f, "strike") && attr(kid(f, "strike"), "val") !== "0", color: color(kid(f, "color")), size: kid(f, "sz") ? +attr(kid(f, "sz"), "val") : null, font: attr(kid(f, "name"), "val") || null }));
   const fills = kids(kid(st, "fills"), "fill").map((f) => { const p = kid(f, "patternFill"); return p && attr(p, "patternType") && attr(p, "patternType") !== "none" ? color(kid(p, "fgColor")) : null; });
@@ -204,7 +479,7 @@ async function readXlsx(bytes) {
     const path = rels[rid]?.target;
     if (!path || !files[path]) continue;
     const x = parseXml(files[path]);
-    const sheet = { id: "s" + (sheets.length + 1), name: sh.attrs.name, cells: new Map(), cols: {}, rows: {}, merges: [], freeze: null };
+    const sheet = { id: "s" + (sheets.length + 1), name: sh.attrs.name, cells: new Map(), cols: {}, rows: {}, merges: [], freeze: null, cf: [], charts: [], pivots: [] };
     if (sh.attrs.state === "hidden" || sh.attrs.state === "veryHidden") sheet.hidden = true;
     for (const c of kids(kid(x, "cols"), "col")) { if (c.attrs.width) for (let i = +c.attrs.min - 1; i <= Math.min(+c.attrs.max - 1, 300); i++) sheet.cols[i] = Math.round(+c.attrs.width * 7 + 5); }
     const pane = deep(x, "pane")[0];
@@ -241,9 +516,15 @@ async function readXlsx(bytes) {
       }
     }
     for (const m of kids(kid(x, "mergeCells"), "mergeCell")) { const [a, b] = m.attrs.ref.split(":").map(ref); if (a && b) sheet.merges.push({ r1: a.r, c1: a.c, r2: b.r, c2: b.c }); }
-    if (kid(x, "conditionalFormatting")) unsupported.add("conditional formatting");
+    sheet.cf = readCf(x, dxfs, unsupported);
+    for (const rel of Object.values(relsOf(files, path))) {
+      if (!files[rel.target]) continue;
+      if (rel.type === "drawing") sheet.charts.push(...readDrawing(files, rel.target, sheet, unsupported).map((c) => ({ ...c, id: `ch${sheet.charts.length + 1}` })));
+      else if (rel.type === "pivotTable") { const pv = readPivot(files, rel.target, unsupported); if (pv) sheet.pivots.push({ ...pv, id: `pv${sheet.pivots.length + 1}` }); }
+    }
     if (kid(x, "dataValidations")) unsupported.add("drop-down lists and data validation");
     if (kid(x, "tableParts")) unsupported.add("Excel tables");
+    sheet.charts = sheet.charts.map((c, i) => ({ ...c, id: `ch${i + 1}` }));
     sheets.push(sheet);
   }
   if (!sheets.length) throw new Error("This spreadsheet has no sheets the editor can read.");
@@ -281,6 +562,58 @@ async function writeXlsx(wb, values) {
     return xfs.length - 1;
   };
   const out = {};
+  // Conditional formatting's looks (dxfs), and the parts for charts and pivot tables.
+  const dxfs = [];
+  const dxfId = (st) => ix(dxfs, dxfXml(st));
+  const byName = new Map(wb.sheets.map((x, i) => [x.name.toLowerCase(), i]));
+  const valueAt = (si, r, c) => { const cell = wb.sheets[si].cells.get(`${r},${c}`); if (!cell) return null; return cell.f ? values(si, r, c) : cell.v; };
+  const cache = (refText) => {
+    const g = rangeRef(refText);
+    const si = g ? byName.get(g.sheet.toLowerCase()) : undefined;
+    if (si === undefined) return [];
+    const pts = [];
+    for (let r = g.r1; r <= g.r2 && pts.length < 10000; r++) for (let c = g.c1; c <= g.c2 && pts.length < 10000; c++) {
+      const v = valueAt(si, r, c), nf = wb.sheets[si].cells.get(`${r},${c}`)?.s?.nf;
+      pts.push({ v, text: v === null || v === undefined ? "" : typeof v === "number" ? F.format(v, nf).text : F.isErr(v) ? v.code : typeof v === "boolean" ? (v ? "TRUE" : "FALSE") : String(v) });
+    }
+    return pts;
+  };
+  const types = [];
+  const wbRels = [];
+  const pivotCaches = [];
+  let chartN = 0, drawingN = 0, pivotN = 0;
+  const sheetRels = wb.sheets.map((sh, si) => {
+    const rels = [];
+    if (sh.charts?.length) {
+      drawingN++;
+      const dPath = `xl/drawings/drawing${drawingN}.xml`;
+      rels.push({ id: "rIdDr1", type: "drawing", target: `../drawings/drawing${drawingN}.xml` });
+      const dRels = sh.charts.map((ch, i) => { chartN++; out[`xl/charts/chart${chartN}.xml`] = chartXml(ch, cache); types.push([`/xl/charts/chart${chartN}.xml`, "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"]); return `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart${chartN}.xml"/>`; });
+      out[dPath] = drawingXml(sh.charts, 1);
+      out[`xl/drawings/_rels/drawing${drawingN}.xml.rels`] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${dRels.join("")}</Relationships>`;
+      types.push([`/${dPath}`, "application/vnd.openxmlformats-officedocument.drawing+xml"]);
+    }
+    for (const pv of sh.pivots || []) {
+      const g = rangeRef(pv.src);
+      const srcI = g ? byName.get(g.sheet.toLowerCase()) : undefined;
+      if (srcI === undefined) continue;
+      const table = [];
+      for (let r = g.r1; r <= Math.min(g.r2, g.r1 + 100000); r++) { const row = []; for (let c = g.c1; c <= g.c2; c++) row.push(valueAt(srcI, r, c)); table.push(row); }
+      pivotN++;
+      const cacheId = pivotN + 99;
+      const x = pivotXml(pv, table, { ...g, sheet: wb.sheets[srcI].name }, cacheId, pv.name || `PivotTable${pivotN}`);
+      out[`xl/pivotCache/pivotCacheDefinition${pivotN}.xml`] = x.cacheDef;
+      out[`xl/pivotTables/pivotTable${pivotN}.xml`] = x.table;
+      out[`xl/pivotTables/_rels/pivotTable${pivotN}.xml.rels`] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition${pivotN}.xml"/></Relationships>`;
+      types.push([`/xl/pivotCache/pivotCacheDefinition${pivotN}.xml`, "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"], [`/xl/pivotTables/pivotTable${pivotN}.xml`, "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"]);
+      rels.push({ id: `rIdPv${pivotN}`, type: "pivotTable", target: `../pivotTables/pivotTable${pivotN}.xml` });
+      const wid = `rIdPc${pivotN}`;
+      wbRels.push(`<Relationship Id="${wid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition${pivotN}.xml"/>`);
+      pivotCaches.push(`<pivotCache cacheId="${cacheId}" r:id="${wid}"/>`);
+    }
+    if (rels.length) out[`xl/worksheets/_rels/sheet${si + 1}.xml.rels`] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels.map((r) => `<Relationship Id="${r.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${r.type}" Target="${r.target}"/>`).join("")}</Relationships>`;
+    return rels;
+  });
   const sheetXml = wb.sheets.map((sh, si) => {
     const rows = new Map();
     let maxR = 0, maxC = 0;
@@ -301,17 +634,20 @@ async function writeXlsx(wb, values) {
     const cols = Object.entries(sh.cols || {}).sort((a, b) => a[0] - b[0]).map(([c, px]) => `<col min="${+c + 1}" max="${+c + 1}" width="${Math.max(1, (px - 5) / 7).toFixed(2)}" customWidth="1"/>`).join("");
     const fr = sh.freeze && (sh.freeze.r || sh.freeze.c) ? `<pane${sh.freeze.c ? ` xSplit="${sh.freeze.c}"` : ""}${sh.freeze.r ? ` ySplit="${sh.freeze.r}"` : ""} topLeftCell="${F.addr(sh.freeze.r, sh.freeze.c)}" activePane="${sh.freeze.r && sh.freeze.c ? "bottomRight" : sh.freeze.r ? "bottomLeft" : "topRight"}" state="frozen"/>` : "";
     const merges = sh.merges?.length ? `<mergeCells count="${sh.merges.length}">${sh.merges.map((m) => `<mergeCell ref="${F.addr(m.r1, m.c1)}:${F.addr(m.r2, m.c2)}"/>`).join("")}</mergeCells>` : "";
-    return XML_HEAD + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="A1:${F.addr(maxR, maxC)}"/><sheetViews><sheetView workbookViewId="0"${si === 0 ? ' tabSelected="1"' : ""}>${fr}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>${cols ? `<cols>${cols}</cols>` : ""}<sheetData>${body}</sheetData>${merges}<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>`;
+    let pri = 0;
+    const cf = writeCf(sh, dxfId, () => ++pri);
+    const drawing = sheetRels[si].some((r) => r.type === "drawing") ? '<drawing r:id="rIdDr1"/>' : "";
+    return XML_HEAD + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><dimension ref="A1:${F.addr(maxR, maxC)}"/><sheetViews><sheetView workbookViewId="0"${si === 0 ? ' tabSelected="1"' : ""}>${fr}</sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>${cols ? `<cols>${cols}</cols>` : ""}<sheetData>${body}</sheetData>${merges}${cf}<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>${drawing}</worksheet>`;
   });
   sheetXml.forEach((x, i) => { out[`xl/worksheets/sheet${i + 1}.xml`] = x; });
   out["xl/sharedStrings.xml"] = XML_HEAD + `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">${strings.map((s) => `<si><t xml:space="preserve">${esc(s)}</t></si>`).join("")}</sst>`;
-  out["xl/styles.xml"] = XML_HEAD + `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${numFmts.size ? `<numFmts count="${numFmts.size}">${[...numFmts].map(([code, id]) => `<numFmt numFmtId="${id}" formatCode="${esc(code)}"/>`).join("")}</numFmts>` : ""}<fonts count="${fonts.length}">${fonts.join("")}</fonts><fills count="${fills.length}">${fills.join("")}</fills><borders count="${borders.length}">${borders.join("")}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
-  out["xl/workbook.xml"] = XML_HEAD + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}"${s.hidden ? ' state="hidden"' : ""} r:id="rId${i + 1}"/>`).join("")}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>`;
-  out["xl/_rels/workbook.xml.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wb.sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${wb.sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId${wb.sheets.length + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>`;
+  out["xl/styles.xml"] = XML_HEAD + `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${numFmts.size ? `<numFmts count="${numFmts.size}">${[...numFmts].map(([code, id]) => `<numFmt numFmtId="${id}" formatCode="${esc(code)}"/>`).join("")}</numFmts>` : ""}<fonts count="${fonts.length}">${fonts.join("")}</fonts><fills count="${fills.length}">${fills.join("")}</fills><borders count="${borders.length}">${borders.join("")}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${xfs.length}">${xfs.join("")}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>${dxfs.length ? `<dxfs count="${dxfs.length}">${dxfs.join("")}</dxfs>` : ""}</styleSheet>`;
+  out["xl/workbook.xml"] = XML_HEAD + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><bookViews><workbookView/></bookViews><sheets>${wb.sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}"${s.hidden ? ' state="hidden"' : ""} r:id="rId${i + 1}"/>`).join("")}</sheets><calcPr calcId="191029" fullCalcOnLoad="1"/>${pivotCaches.length ? `<pivotCaches>${pivotCaches.join("")}</pivotCaches>` : ""}</workbook>`;
+  out["xl/_rels/workbook.xml.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${wb.sheets.map((s, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${wb.sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId${wb.sheets.length + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>${wbRels.join("")}</Relationships>`;
   out["_rels/.rels"] = XML_HEAD + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>${CUSTOM_REL}</Relationships>`;
   out["docProps/core.xml"] = coreXml();
   out["docProps/custom.xml"] = customXml({ WebmailSheetIds: wb.sheets.map((sh) => sh.id).join(" ") });
-  out["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${CUSTOM_TYPE}<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
+  out["[Content_Types].xml"] = XML_HEAD + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>${CUSTOM_TYPE}<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${wb.sheets.map((s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>${types.map(([n, t]) => `<Override PartName="${n}" ContentType="${t}"/>`).join("")}</Types>`;
   return zip(out);
 }
 /** Custom document properties (docProps/custom.xml): kept by Word and Excel. The editors keep their ids there. */

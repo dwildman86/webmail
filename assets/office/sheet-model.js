@@ -19,12 +19,78 @@
  *   { t: "sheet", id, name, at }                              a new sheet
  *   { t: "sheetDel", id } / { t: "sheetName", id, name } / { t: "sheetMove", id, at } / { t: "sheetHide", id, hidden }
  *   { t: "sheetData", id, sheet }                             a whole sheet put back (undoing a delete)
+ *   { t: "obj", sheet, kind: "cf" | "chart" | "pivot", id, data } a conditional format rule, chart or pivot table
+ *                                                             set (the whole of it), or removed (data null)
+ *
+ * Objects (on a sheet, in sh.cf, sh.charts, sh.pivots; each { id, ...data }):
+ *   cf:    { ranges: [{r1,c1,r2,c2}], pri, stop, rule: { type, … }, style: { bg, color, b, i, u, s } } (sheet-extras.js)
+ *   chart: { type, title, series: [{ name, cat, val }] (refs like "Sheet1!$B$2:$B$9", or a name in quotes), anchor: { r, c, dx, dy, w, h }, … }
+ *   pivot: { src: "Sheet1!$A$1:$D$40", at: { r, c }, rows: [field], cols: [field], vals: [{ field, fn }], size: { rows, cols } }
  */
+const OBJ = { cf: "cf", chart: "charts", pivot: "pivots" };
 const KEY = (r, c) => `${r},${c}`;
 const unkey = (k) => k.split(",").map(Number);
 const sheetOf = (wb, id) => wb.sheets.find((s) => s.id === id);
-const clone = (wb) => ({ ...wb, sheets: wb.sheets.map((s) => ({ ...s, cells: new Map(s.cells), cols: { ...s.cols }, rows: { ...s.rows }, merges: s.merges.map((m) => ({ ...m })), freeze: s.freeze && { ...s.freeze } })) });
-const blank = (id, name) => ({ id, name, cells: new Map(), cols: {}, rows: {}, merges: [], freeze: null });
+const clone = (wb) => ({ ...wb, sheets: wb.sheets.map((s) => ({ ...s, cells: new Map(s.cells), cols: { ...s.cols }, rows: { ...s.rows }, merges: s.merges.map((m) => ({ ...m })), freeze: s.freeze && { ...s.freeze },
+  cf: [...(s.cf || [])], charts: [...(s.charts || [])], pivots: [...(s.pivots || [])] })) });
+const blank = (id, name) => ({ id, name, cells: new Map(), cols: {}, rows: {}, merges: [], freeze: null, cf: [], charts: [], pivots: [] });
+
+/** A sheet-qualified range reference ("Sheet1!$B$2:$B$9") as written in charts and pivot tables, and back. */
+function refOf(sheetName, r1, c1, r2 = r1, c2 = c1) {
+  const a = `$${F.colName(c1)}$${r1 + 1}`, b = `$${F.colName(c2)}$${r2 + 1}`;
+  return `${F.quoteSheet(sheetName)}!${a}${a === b ? "" : ":" + b}`;
+}
+function parseRef(ref, here = null) {
+  if (typeof ref !== "string" || !ref) return null;
+  let toks;
+  try { toks = F.tokenize(ref.replace(/^=/, "")); } catch { return null; }
+  const t = toks.find((x) => x.t === "ref" || x.t === "range");
+  if (!t) return null;
+  const v = t.v, sheet = v.sheet ?? here;
+  if (t.t === "ref") return { sheet, r1: v.r, c1: v.c, r2: v.r, c2: v.c };
+  return { sheet, r1: Math.min(v.r1, v.r2), c1: Math.min(v.c1, v.c2), r2: Math.max(v.r1, v.r2), c2: Math.max(v.c1, v.c2) };
+}
+const isText = (ref) => typeof ref !== "string" || !ref || ref[0] === '"';
+const adjRef = (ref, here, sheet, axis, at, n) => { if (isText(ref)) return ref; const out = F.adjust("=" + ref, here, sheet, axis, at, n).slice(1); return out.includes("#REF!") ? null : out; };
+const renRef = (ref, from, to) => (isText(ref) ? ref : F.renameSheet("=" + ref, from, to).slice(1));
+
+/**
+ * An object after rows or columns were inserted (n > 0) or deleted (n < 0) on the sheet named $changed. $here is the
+ * name of the object's own sheet. Null when nothing of it is left.
+ */
+function shiftObj(kind, d, here, changed, axis, at, n) {
+  const same = here === changed;
+  const k1 = axis === "r" ? "r1" : "c1", k2 = axis === "r" ? "r2" : "c2";
+  if (kind === "cf") {
+    if (!same) return d;
+    const ranges = d.ranges.map((g) => { const m = moveRange(g[k1], g[k2], at, n); return m && { ...g, [k1]: m[0], [k2]: m[1] }; }).filter(Boolean);
+    if (!ranges.length) return null;
+    const rule = { ...d.rule };
+    for (const k of ["a", "b", "f"]) if (typeof rule[k] === "string" && rule[k]) rule[k] = F.adjust("=" + rule[k], here, changed, axis, at, n).slice(1);
+    return { ...d, ranges, rule };
+  }
+  if (kind === "chart") {
+    const series = d.series.map((x) => ({ ...x, cat: adjRef(x.cat, here, changed, axis, at, n), val: adjRef(x.val, here, changed, axis, at, n), name: adjRef(x.name, here, changed, axis, at, n) })).filter((x) => x.val);
+    if (!series.length) return null;
+    let anchor = d.anchor;
+    if (same && anchor) { const k = axis; const m = move(anchor[k], at, n); anchor = { ...anchor, [k]: m === null ? at : m }; }
+    return { ...d, series, anchor };
+  }
+  if (kind === "pivot") {
+    const src = adjRef(d.src, here, changed, axis, at, n);
+    if (!src) return null;
+    let at2 = d.at;
+    if (same) { const k = axis; const m = move(at2[k], at, n); if (m === null) return null; at2 = { ...at2, [k]: m }; }
+    return { ...d, src, at: at2 };
+  }
+  return d;
+}
+function renameObj(kind, d, from, to) {
+  if (kind === "chart") return { ...d, series: d.series.map((x) => ({ ...x, cat: renRef(x.cat, from, to), val: renRef(x.val, from, to), name: renRef(x.name, from, to) })) };
+  if (kind === "pivot") return { ...d, src: renRef(d.src, from, to) };
+  return d;
+}
+const byPri = (a, b) => (a.pri ?? 0) - (b.pri ?? 0);
 
 function patchStyle(s, patch) {
   const out = { ...(s || {}) };
@@ -93,6 +159,8 @@ function apply(wb, op) {
       if (sh.freeze) { const k = op.axis; const f = sh.freeze[k]; if (f > op.at) sh.freeze = { ...sh.freeze, [k]: Math.max(op.at, f + n) }; }
       // Formulas everywhere that point at this sheet follow the cells.
       for (const s of wb.sheets) for (const [k, cell] of s.cells) if (cell.f) { const f = F.adjust(cell.f, s.name, sh.name, op.axis, op.at, n); if (f !== cell.f) s.cells.set(k, { ...cell, f }); }
+      // Conditional formats, charts and pivot tables follow their cells too.
+      for (const s of wb.sheets) for (const [kind, key] of Object.entries(OBJ)) if (s[key]?.length) s[key] = s[key].map((o) => { const d = shiftObj(kind, o, s.name, sh.name, op.axis, op.at, n); return d && { ...d, id: o.id }; }).filter(Boolean);
       return { sheet: sh.id, cells: "all", structure: true, formulas: true };
     }
     case "size":
@@ -110,6 +178,14 @@ function apply(wb, op) {
       if (!sh) return null;
       sh.freeze = op.r || op.c ? { r: op.r | 0, c: op.c | 0 } : null;
       return { sheet: sh.id, cells: "all", structure: true };
+    case "obj": {
+      const key = OBJ[op.kind];
+      if (!sh || !key) return null;
+      const list = (sh[key] || []).filter((o) => o.id !== op.id);
+      if (op.data) { list.push({ ...op.data, id: op.id }); if (op.kind === "cf") list.sort(byPri); }
+      sh[key] = list;
+      return { sheet: sh.id, cells: "all", objects: op.kind };
+    }
     case "sheet": {
       if (sheetOf(wb, op.id)) return null;
       const name = uniqueName(wb, op.name);
@@ -119,7 +195,7 @@ function apply(wb, op) {
     case "sheetData": {
       if (sheetOf(wb, op.id)) return null;
       const s = op.sheet;
-      wb.sheets.splice(Math.max(0, Math.min(op.at ?? wb.sheets.length, wb.sheets.length)), 0, { ...blank(op.id, uniqueName(wb, s.name)), cells: new Map(s.cells), cols: { ...s.cols }, rows: { ...s.rows }, merges: s.merges.map((m) => ({ ...m })), freeze: s.freeze, hidden: s.hidden });
+      wb.sheets.splice(Math.max(0, Math.min(op.at ?? wb.sheets.length, wb.sheets.length)), 0, { ...blank(op.id, uniqueName(wb, s.name)), cells: new Map(s.cells), cols: { ...s.cols }, rows: { ...s.rows }, merges: s.merges.map((m) => ({ ...m })), freeze: s.freeze, hidden: s.hidden, cf: [...(s.cf || [])], charts: [...(s.charts || [])], pivots: [...(s.pivots || [])] });
       return { sheets: true, formulas: true };
     }
     case "sheetDel": {
@@ -135,6 +211,7 @@ function apply(wb, op) {
       if (from === to) return null;
       s.name = to;
       for (const x of wb.sheets) for (const [k, cell] of x.cells) if (cell.f) { const f = F.renameSheet(cell.f, from, to); if (f !== cell.f) x.cells.set(k, { ...cell, f }); }
+      for (const x of wb.sheets) for (const [kind, key] of Object.entries(OBJ)) if (x[key]?.length) x[key] = x[key].map((o) => renameObj(kind, o, from, to));
       return { sheets: true, formulas: true };
     }
     case "sheetMove": {
@@ -172,6 +249,15 @@ function rebase(op, against) {
 function past(o, a) {
   if (a.t === "sheetDel" && (o.sheet === a.id || (o.t.startsWith("sheet") && o.t !== "sheet" && o.t !== "sheetData" && o.id === a.id))) return null;
   if (a.t !== "ins" && a.t !== "del") return o;
+  if (o.t === "obj") {
+    // The op doesn't carry its own sheet's name: on the changed sheet it's a.name; elsewhere only refs naming a.name move.
+    if (!o.data) return o;
+    const NONE = "\u0000";
+    const here = o.sheet === a.sheet ? a.name ?? NONE : NONE;
+    const changed = o.sheet === a.sheet ? here : a.name ?? "\u0001";
+    const d = shiftObj(o.kind, o.data, here, changed, a.axis, a.at, a.t === "ins" ? a.n : -a.n);
+    return { ...o, data: d };
+  }
   if (o.sheet !== a.sheet) {
     // A formula on another sheet that points at the one that changed (by the name it had then).
     if (o.t !== "set" || !a.name) return o;
@@ -249,9 +335,10 @@ function inverse(wb, op) {
       return [{ t: "merge", sheet: op.sheet, r1: op.r1, c1: op.c1, r2: op.r2, c2: op.c2, on: false }, ...overlaps.map((g) => ({ t: "merge", sheet: op.sheet, ...g, on: true }))];
     }
     case "freeze": return sh && { t: "freeze", sheet: op.sheet, r: sh.freeze?.r || 0, c: sh.freeze?.c || 0 };
+    case "obj": { if (!sh) return null; const old = (sh[OBJ[op.kind]] || []).find((o) => o.id === op.id); return { t: "obj", sheet: op.sheet, kind: op.kind, id: op.id, data: old ? (({ id, ...d }) => d)(old) : null }; }
     case "sheet": return { t: "sheetDel", id: op.id };
     case "sheetData": return { t: "sheetDel", id: op.id };
-    case "sheetDel": { const i = wb.sheets.findIndex((s) => s.id === op.id); const s = wb.sheets[i]; return s && { t: "sheetData", id: s.id, at: i, sheet: { name: s.name, cells: [...s.cells], cols: s.cols, rows: s.rows, merges: s.merges, freeze: s.freeze, hidden: s.hidden } }; }
+    case "sheetDel": { const i = wb.sheets.findIndex((s) => s.id === op.id); const s = wb.sheets[i]; return s && { t: "sheetData", id: s.id, at: i, sheet: { name: s.name, cells: [...s.cells], cols: s.cols, rows: s.rows, merges: s.merges, freeze: s.freeze, hidden: s.hidden, cf: s.cf, charts: s.charts, pivots: s.pivots } }; }
     case "sheetName": { const s = sheetOf(wb, op.id); return s && { t: "sheetName", id: op.id, name: s.name }; }
     case "sheetMove": { const i = wb.sheets.findIndex((s) => s.id === op.id); return i >= 0 && { t: "sheetMove", id: op.id, at: i }; }
     case "sheetHide": { const s = sheetOf(wb, op.id); return s && { t: "sheetHide", id: op.id, hidden: !!s.hidden }; }
@@ -273,5 +360,5 @@ function extent(sh) {
   return { rows: r, cols: c };
 }
 
-return { apply, rebase, inverse, revive, clone, extent, KEY, unkey, blank, uniqueName, patchStyle, move };
+return { apply, rebase, inverse, revive, clone, extent, KEY, unkey, blank, uniqueName, patchStyle, move, moveRange, refOf, parseRef, shiftObj, OBJ };
 });
