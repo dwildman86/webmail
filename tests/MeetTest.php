@@ -336,4 +336,56 @@ final class MeetTest extends TestCase
         // The guest knocking on a full meeting and Alex refused: two (the refused let-in isn't counted again).
         $this->assertSame('2', (string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'meet_n_full'"));
     }
+
+    public function testASeventhPersonMovesTheMeetingToTheMediaServerWithItsOwnKey(): void
+    {
+        $this->answers['GET /v1/me'] = fn () => [200, ['features' => ['meetings' => ['enabled' => true, 'max_people' => 25, 'sfu' => 'wss://media.ghostparse.test:20001']]]];
+        $tickets = [];
+        $this->answers['POST /v1/webmail/sfu/join'] = function (array $body) use (&$tickets) {
+            $tickets[] = $body;
+            return [200, ['url' => 'wss://media.ghostparse.test:20001', 'token' => 'ticket-' . $body['peer'], 'max' => 25, 'ice_servers' => [['urls' => ['stun:stun.example.test']]]]];
+        };
+        $this->assertSame(25, $this->meet->effective()['max']);
+        $room = $this->meet->room($this->meet->create($this->sarah, 'All hands')['token']);
+        $s = $this->meet->join($room, $this->sarah, '');
+        $this->assertSame('mesh', $s['mode']);
+        $this->fails(fn () => $this->meet->sfuJoin($room, $this->peerRow($room, $s)), 409, '/media server/');
+        $guests = [];
+        for ($i = 1; $i <= 5; $i++) {
+            $guests[] = $g = $this->meet->join($room, null, "Guest $i");
+            $this->meet->admit($room, $this->peerRow($room, $s), $g['id'], true);
+        }
+        $this->assertSame('mesh', $this->meet->poll($room, $this->peerRow($room, $s), 0)['mode'], 'six: still peer to peer');
+        $k = $this->meet->join($room, $this->kim, '');
+        $this->assertSame('sfu', $k['mode'], 'the seventh: the media server');
+        $this->assertSame('sfu', $this->meet->poll($room, $this->peerRow($room, $s), 0)['mode']);
+
+        $join = $this->meet->sfuJoin($room, $this->peerRow($room, $k));
+        $this->assertSame('ticket-' . $k['id'], $join['token']);
+        $this->assertSame(43, strlen($join['key']), 'a 256-bit key');
+        $this->assertSame($join['key'], $this->meet->sfuJoin($room, $this->peerRow($room, $s))['key'], 'the same key for everyone in it');
+        // GhostParse gets an opaque id for the meeting and the person's number: never the link, a name or the key.
+        $sent = json_encode($tickets);
+        $this->assertStringNotContainsString($join['key'], $sent);
+        $this->assertStringNotContainsString(hash('sha256', ''), $sent);
+        $this->assertMatchesRegularExpression('/^[0-9a-f]{32}$/', $tickets[0]['room']);
+        $this->assertStringNotContainsString($join['key'], (string) $this->app->db->value('SELECT key_enc FROM {meet_rooms} WHERE id = ?', [$room['id']]), 'kept encrypted');
+        // Someone waiting in the lobby gets no key.
+        $late = $this->meet->join($room, null, 'Late guest');
+        $this->fails(fn () => $this->meet->sfuJoin($room, $this->peerRow($room, $late)), 403);
+        // Up to 25.
+        $this->assertSame(25, $this->meet->poll($room, $this->peerRow($room, $s), 0)['max']);
+    }
+
+    public function testWithoutTheMediaServerMeetingsStayAtSix(): void
+    {
+        // A policy above 6 without a media server address (an older GhostParse, or none set up): 6.
+        $this->answers['GET /v1/me'] = fn () => [200, ['features' => ['meetings' => ['enabled' => true, 'max_people' => 25]]]];
+        $this->assertSame(6, $this->meet->effective()['max']);
+        // Only wss:// addresses are taken (ws:// only on this machine, for development).
+        $this->answers['GET /v1/me'] = fn () => [200, ['features' => ['meetings' => ['enabled' => true, 'max_people' => 25, 'sfu' => 'ws://evil.example:20001']]]];
+        $this->meet->policy(true);
+        $this->assertSame(6, $this->meet->effective()['max']);
+        $this->assertNull($this->meet->effective()['policy']['sfu']);
+    }
 }

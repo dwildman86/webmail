@@ -6,6 +6,10 @@
 // other at once; the older one answers on the transceivers the offer brought, so each connection has one audio and
 // one video line each way. Camera on and off, a different camera and sharing the screen swap the track being sent
 // (replaceTrack): no new offer needed. A connection that fails is restarted by whoever offered it.
+//
+// Meetings of more than six (when GhostParse allows them) move to GhostParse's media server when the seventh person
+// joins: everyone then sends once, to it, and it forwards (see "the media server" below). Each audio and video frame
+// is encrypted end to end with the meeting's key first (meet-e2ee.js), so the media server can't see or hear it.
 "use strict";
 
 (() => {
@@ -14,6 +18,9 @@
   let MAX = Number(D.max || 6); // the most people in a meeting (6, or less if the organisation's limit is lower)
   const MEMBER = D.member || "";
   const $root = document.getElementById("meet");
+  const V = (/[?&]v=([^&]+)/.exec(document.currentScript?.src || "") || [])[1] || "";
+  /** "mesh" (everyone to everyone) or "sfu" (through GhostParse's media server, for more than six). */
+  let mode = "mesh";
 
   // ---------------------------------------------------------------------------------------------- small helpers
   function h(tag, attrs = {}, ...children) {
@@ -139,8 +146,14 @@
   /** Every connection sends what we're sending now. */
   async function pushTracks() {
     syncLocalStream();
-    for (const p of people.values()) await p.conn?.sendTracks();
+    if (mode === "sfu") await sfuSync();
+    else for (const p of people.values()) await p.conn?.sendTracks();
     render();
+  }
+  /** A message (status, chat) to everyone in the meeting: over each connection, or once through the media server, encrypted. */
+  function sendAll(msg) {
+    if (mode === "sfu") sfuData(msg);
+    else for (const p of people.values()) p.conn?.say(msg);
   }
 
   // ---------------------------------------------------------------------------------------------- one connection to one person
@@ -263,6 +276,7 @@
   // Connection details arrive in order; each person's are dealt with one after another.
   const chains = new Map();
   function onSignal(s) {
+    if (mode === "sfu") return; // left over from before the meeting moved to the media server
     const person = people.get(s.from) || { id: s.from, name: "", state: {} };
     if (!people.has(s.from)) people.set(s.from, person);
     if (s.kind === "bye") { person.conn?.close(); person.conn = null; return; }
@@ -273,6 +287,285 @@
       await connectTo(person).onSignal(s.kind, s.data);
     }).catch((err) => console.warn("signal", err));
     chains.set(s.from, next);
+  }
+
+  // ---------------------------------------------------------------------------------------------- the media server
+  // Meetings of more than six: everyone sends once, to GhostParse's media server, which forwards to the others
+  // (mediasoup). Each audio and video frame is encrypted end to end first, with the meeting's key (meet-e2ee.js), and
+  // chat and status updates with the same key: the media server forwards what it can't read. Names, who's in, and
+  // letting people in stay with the webmail (poll).
+  const sfu = { ws: null, device: null, send: null, recv: null, mic: null, video: null, key: null, rawKey: null, reqs: new Map(), nextId: 1,
+    consumers: new Map(), state: "new", worker: null, e2ee: null, leaving: false, syncing: Promise.resolve(), retry: 0, layers: new Map(),
+    /** Streams announced before we could receive (everyone connects at once when a meeting moves): taken once ready. */
+    waiting: [] };
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      if (window.mediasoupClient) { resolve(); return; }
+      const el = document.createElement("script");
+      el.src = src; el.onload = () => resolve(); el.onerror = () => reject(new Error("The meeting software didn't load. Reload the page."));
+      document.head.append(el);
+    });
+  }
+  /**
+   * How this browser encrypts frames: Chrome's own way where it has it (Chrome, Edge), else the standard one (Safari,
+   * Firefox), or not at all (then it can't join a meeting on the media server).
+   */
+  function e2eeWay() {
+    if (window.RTCRtpSender && "createEncodedStreams" in RTCRtpSender.prototype) return "streams";
+    if (window.RTCRtpScriptTransform) return "script";
+    return null;
+  }
+  /** Frames each sending pipe has encrypted, as the worker reports them. */
+  const encrypted = new Map();
+  /** And each receiving pipe has decrypted. */
+  const decrypted = new Map();
+  let pipeIds = 0;
+  function e2eeAttach(rtp, kind, op) {
+    if (!rtp) return 0;
+    const id = ++pipeIds;
+    if (sfu.e2ee === "script") rtp.transform = new RTCRtpScriptTransform(sfu.worker, { op, kind, id });
+    else { const { readable, writable } = rtp.createEncodedStreams(); sfu.worker.postMessage({ op, kind, id, readable, writable }, [readable, writable]); }
+    return id;
+  }
+  /**
+   * Nothing leaves unencrypted: a few seconds after we start sending, the worker must have encrypted frames for it.
+   * If it hasn't (a browser whose encryption hook doesn't take effect), we stop sending that and say so.
+   */
+  function e2eeVerify(producer, id, what) {
+    setTimeout(async () => {
+      if (!producer || producer.closed || producer.paused || encrypted.get(id) > 0) return;
+      try { await sfuReq("closeProducer", { producerId: producer.id }); } catch { /* gone anyway */ }
+      producer.close();
+      if (sfu.mic === producer) sfu.mic = null;
+      if (sfu.video === producer) sfu.video = null;
+      sfu.blocked = true;
+      render(true);
+    }, 6000);
+  }
+  const b64 = { to: (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+    from: (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)), (c) => c.charCodeAt(0)) };
+  async function sfuData(msg) {
+    if (!sfu.key || sfu.ws?.readyState !== 1) return;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, sfu.key, new TextEncoder().encode(JSON.stringify(msg))));
+    const all = new Uint8Array(12 + ct.length); all.set(iv); all.set(ct, 12);
+    sfuReq("data", { payload: b64.to(all) }).catch(() => {});
+  }
+  async function sfuOpen(payload) {
+    try {
+      const all = b64.from(payload);
+      return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.subarray(0, 12) }, sfu.key, all.subarray(12))));
+    } catch { return null; } // not from someone with the meeting's key
+  }
+  function sfuReq(m, body = {}) {
+    return new Promise((resolve, reject) => {
+      if (sfu.ws?.readyState !== 1) { reject(new Error("Not connected to the media server.")); return; }
+      const id = sfu.nextId++;
+      sfu.reqs.set(id, { resolve, reject });
+      sfu.ws.send(JSON.stringify({ id, m, ...body }));
+      setTimeout(() => { if (sfu.reqs.has(id)) { sfu.reqs.delete(id); reject(new Error("The media server didn't answer.")); } }, 15000);
+    });
+  }
+  /** A person's media from the media server: shaped like a direct connection, so the rest of the page needn't care. */
+  function sfuPerson(peerId) {
+    let person = people.get(peerId);
+    if (!person) { person = { id: peerId, name: "", state: {} }; people.set(peerId, person); }
+    if (!person.conn || !person.conn.sfu) {
+      person.conn?.close?.();
+      person.conn = { sfu: true, stream: new MediaStream(), pc: { get connectionState() { return sfu.state; } }, dc: { readyState: "open" }, offerer: false, failedAt: 0,
+        say: () => {}, sendTracks: async () => {}, tuneVideo: () => {}, close: () => {}, onSignal: async () => {} };
+    }
+    return person;
+  }
+
+  async function switchToSfu() {
+    if (mode === "sfu") return;
+    mode = "sfu";
+    toast(`More than ${6} people: the meeting is moving to GhostParse's media server. It stays encrypted end to end.`);
+    for (const p of people.values()) { p.conn?.close(); p.conn = null; }
+    chains.clear(); outbox.length = 0;
+    await sfuStart();
+    shareState();
+  }
+
+  async function sfuStart() {
+    sfu.e2ee = e2eeWay();
+    if (!sfu.e2ee) {
+      toast("This browser can't join meetings of more than six (they're encrypted end to end). Use a recent Chrome, Edge, Firefox or Safari.");
+      return;
+    }
+    sfu.leaving = false;
+    try {
+      await loadScript(`assets/vendor/mediasoup-client.js?v=${V}`);
+      const info = await call("sfu");
+      sfu.rawKey = b64.from(info.key);
+      sfu.key = await crypto.subtle.importKey("raw", sfu.rawKey, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+      if (!sfu.worker) {
+        sfu.worker = new Worker(`assets/meet-e2ee.js?v=${V}`);
+        sfu.worker.onmessage = (e) => {
+          if (e.data?.type === "encrypted") encrypted.set(e.data.id, e.data.frames);
+          // A stream we receive is played only once frames really are being decrypted (never encrypted noise).
+          if (e.data?.type === "decrypted" && !decrypted.has(e.data.id)) {
+            decrypted.set(e.data.id, e.data.frames);
+            for (const c of sfu.consumers.values()) if (c.pipe === e.data.id) c.consumer.track.enabled = true;
+            render(true);
+          } else if (e.data?.type === "decrypted") decrypted.set(e.data.id, e.data.frames);
+          if (e.data?.type === "undecryptable" && e.data.count === 1) console.warn("meeting: frames that couldn't be decrypted were dropped");
+        };
+      }
+      sfu.worker.postMessage({ type: "key", key: sfu.rawKey.buffer.slice(0) });
+      await sfuConnect(info.url);
+      const joined = await sfuReq("join", { token: info.token });
+      sfu.device = new mediasoupClient.Device();
+      await sfu.device.load({ routerRtpCapabilities: joined.routerRtpCapabilities });
+      await sfuReq("setCapabilities", { rtpCapabilities: sfu.device.rtpCapabilities });
+      const extra = sfu.e2ee === "streams" ? { additionalSettings: { encodedInsertableStreams: true } } : {};
+      const make = async (direction) => {
+        const { transport: t } = await sfuReq("createTransport", { direction });
+        const opts = { id: t.id, iceParameters: t.iceParameters, iceCandidates: t.iceCandidates, dtlsParameters: t.dtlsParameters, iceServers: info.ice_servers || [], ...extra };
+        const tr = direction === "send" ? sfu.device.createSendTransport(opts) : sfu.device.createRecvTransport(opts);
+        tr.on("connect", ({ dtlsParameters }, ok, fail) => sfuReq("connectTransport", { transportId: tr.id, dtlsParameters }).then(() => ok(), fail));
+        tr.on("connectionstatechange", async (st) => {
+          if (direction === "recv") { sfu.state = st; render(); }
+          if (st === "failed" || st === "disconnected") {
+            try { const r = await sfuReq("restartIce", { transportId: tr.id }); await tr.restartIce({ iceParameters: r.iceParameters }); } catch { /* the socket's reconnect handles it */ }
+          }
+        });
+        if (direction === "send") tr.on("produce", ({ kind, rtpParameters, appData }, ok, fail) => sfuReq("produce", { transportId: tr.id, kind, rtpParameters, appData }).then((r) => ok({ id: r.producerId }), fail));
+        return tr;
+      };
+      sfu.send = await make("send");
+      sfu.recv = await make("recv");
+      sfu.retry = 0;
+      // What others already send, and what was announced while we got ready.
+      const announced = [...joined.peers.flatMap((p) => p.producers.map((pr) => [p.id, pr])), ...sfu.waiting.splice(0)];
+      for (const [peerId, pr] of announced) await sfuConsume(peerId, pr);
+      await sfuSync();
+      render();
+    } catch (err) {
+      console.warn("media server", err);
+      toast(`Couldn't connect to the media server: ${err.message}`);
+      sfuReconnectLater();
+    }
+  }
+
+  function sfuConnect(url) {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url);
+      sfu.ws = ws;
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("The media server couldn't be reached."));
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (m.id && sfu.reqs.has(m.id)) {
+          const r = sfu.reqs.get(m.id); sfu.reqs.delete(m.id);
+          if (m.ok) r.resolve(m); else { const err = new Error(m.error || "The media server refused."); err.code = m.code; r.reject(err); }
+          return;
+        }
+        sfuNotice(m).catch((err) => console.warn("media server notice", err));
+      };
+      ws.onclose = () => {
+        for (const r of sfu.reqs.values()) r.reject(new Error("Disconnected from the media server."));
+        sfu.reqs.clear();
+        if (ws === sfu.ws && !sfu.leaving && me.status === "in") { sfuReset(); sfuReconnectLater(); }
+      };
+    });
+  }
+  function sfuReconnectLater() {
+    if (sfu.leaving || me.status !== "in") return;
+    const delay = Math.min(15000, 1000 * 2 ** sfu.retry++);
+    if (!document.querySelector(".mt-offline")) document.body.append(h("div", { class: "mt-offline", role: "status" }, "Reconnecting to the media server…"));
+    setTimeout(() => { if (me.status === "in" && mode === "sfu" && !sfu.leaving) sfuStart().then(() => { if (sfu.ws?.readyState === 1) document.querySelector(".mt-offline")?.remove(); }); }, delay);
+  }
+  /** Transports, producers and consumers gone (the connection dropped); people's tiles stay until they're back. */
+  function sfuReset() {
+    try { sfu.send?.close(); sfu.recv?.close(); } catch { /* closed */ }
+    sfu.send = sfu.recv = sfu.mic = sfu.video = null;
+    for (const c of sfu.consumers.values()) { c.person.conn?.stream.removeTrack(c.consumer.track); }
+    sfu.consumers.clear(); sfu.layers.clear(); sfu.waiting = [];
+    sfu.state = "connecting";
+  }
+  function sfuClose() {
+    sfu.leaving = true;
+    sfuReset();
+    try { sfu.ws?.close(); } catch { /* closed */ }
+    sfu.ws = null;
+    sfu.worker?.terminate(); sfu.worker = null;
+  }
+
+  async function sfuNotice(m) {
+    if (m.n === "newProducer") await sfuConsume(m.peer, m.producer);
+    else if (m.n === "consumerClosed") {
+      const c = sfu.consumers.get(m.consumerId);
+      if (c) { c.person.conn?.stream.removeTrack(c.consumer.track); c.consumer.close(); sfu.consumers.delete(m.consumerId); sfu.layers.delete(m.consumerId); render(true); }
+    } else if (m.n === "consumerPaused" || m.n === "consumerResumed") render(true);
+    else if (m.n === "peerJoined") shareState(); // so they see whether we're muted and so on
+    else if (m.n === "peerLeft") {
+      for (const [id, c] of sfu.consumers) if (c.peer === m.peer) { c.person.conn?.stream.removeTrack(c.consumer.track); c.consumer.close(); sfu.consumers.delete(id); }
+      render(true);
+    } else if (m.n === "data") {
+      const msg = await sfuOpen(m.payload);
+      if (msg) onData(sfuPerson(m.from), msg);
+    }
+  }
+
+  async function sfuConsume(peerId, producer) {
+    if (peerId === me.id) return;
+    if (!sfu.recv) { sfu.waiting.push([peerId, producer]); return; }
+    if ([...sfu.consumers.values()].some((c) => c.consumer.producerId === producer.id)) return; // already have it
+    const r = await sfuReq("consume", { producerId: producer.id, spatialLayer: people.size > 12 ? 0 : people.size > 6 ? 1 : 2 }).catch((err) => { if (err.code !== "gone") console.warn(err); return null; });
+    if (!r) return;
+    const c = r.consumer;
+    const consumer = await sfu.recv.consume({ id: c.id, producerId: c.producerId, kind: c.kind, rtpParameters: c.rtpParameters, appData: c.appData });
+    const pipe = e2eeAttach(consumer.rtpReceiver, consumer.kind, "decrypt");
+    consumer.track.enabled = false; // until its frames are decrypted
+    const person = sfuPerson(peerId);
+    for (const t of person.conn.stream.getTracks()) if (t.kind === consumer.kind) person.conn.stream.removeTrack(t);
+    person.conn.stream.addTrack(consumer.track);
+    sfu.consumers.set(consumer.id, { consumer, peer: peerId, person, kind: consumer.kind, pipe });
+    if (consumer.kind === "video") person.conn.videoPipe = pipe;
+    if (consumer.kind === "audio") watchVoice(peerId, person.conn.stream);
+    await sfuReq("resumeConsumer", { consumerId: consumer.id });
+    render(true);
+  }
+
+  /** What we send matches what we have: the microphone, and the camera or screen (paused when off). One at a time. */
+  function sfuSync() {
+    sfu.syncing = sfu.syncing.then(async () => {
+      if (!sfu.send) return;
+      if (sfu.blocked) return;
+      if (local.mic && !sfu.mic) {
+        sfu.mic = await sfu.send.produce({ track: local.mic, stopTracks: false, codecOptions: { opusDtx: false, opusFec: true }, appData: { source: "mic" } });
+        e2eeVerify(sfu.mic, e2eeAttach(sfu.mic.rtpSender, "audio", "encrypt"), "sound");
+      } else if (sfu.mic && local.mic && sfu.mic.track !== local.mic) await sfu.mic.replaceTrack({ track: local.mic });
+      const v = sendingVideo();
+      if (v && !sfu.video) {
+        // Three qualities (simulcast): the media server forwards each person the one that fits their screen and connection.
+        sfu.video = await sfu.send.produce({ track: v, stopTracks: false, zeroRtpOnPause: true, appData: { source: "cam" },
+          encodings: [{ rid: "r0", maxBitrate: 150_000, scaleResolutionDownBy: 4 }, { rid: "r1", maxBitrate: 500_000, scaleResolutionDownBy: 2 }, { rid: "r2", maxBitrate: 1_200_000 }] });
+        e2eeVerify(sfu.video, e2eeAttach(sfu.video.rtpSender, "video", "encrypt"), "video");
+      } else if (v && sfu.video) {
+        if (sfu.video.track !== v) await sfu.video.replaceTrack({ track: v });
+        if (sfu.video.paused) { sfu.video.resume(); await sfuReq("resumeProducer", { producerId: sfu.video.id }); }
+      } else if (!v && sfu.video && !sfu.video.paused) {
+        sfu.video.pause(); await sfuReq("pauseProducer", { producerId: sfu.video.id });
+      }
+    }).catch((err) => console.warn("media server send", err));
+    return sfu.syncing;
+  }
+
+  /** The quality each tile needs: the person on the big screen in full, smaller tiles less (saves everyone bandwidth). */
+  function sfuLayers(bigId) {
+    if (mode !== "sfu") return;
+    const n = people.size + 1;
+    for (const [id, c] of sfu.consumers) {
+      if (c.kind !== "video") continue;
+      const want = c.peer === bigId ? 2 : n > 12 ? 0 : n > 6 ? 1 : 2;
+      if (sfu.layers.get(id) === want) continue;
+      sfu.layers.set(id, want);
+      sfuReq("setLayers", { consumerId: id, spatialLayer: want }).catch(() => {});
+    }
   }
 
   // ---------------------------------------------------------------------------------------------- who's talking
@@ -318,7 +611,7 @@
   let stateTimer = null;
   function shareState() {
     const state = myState();
-    for (const p of people.values()) p.conn?.say({ t: "state", state });
+    sendAll({ t: "state", state });
     clearTimeout(stateTimer);
     stateTimer = setTimeout(() => call("state", { state }).catch(() => {}), 150);
     render();
@@ -348,10 +641,12 @@
       if (r.status !== me.status) {
         const before = me.status;
         me.status = r.status;
-        if (before === "lobby" && r.status === "in") { await admitted(); }
+        if (before === "lobby" && r.status === "in") { mode = r.mode === "sfu" ? "sfu" : "mesh"; await admitted(); }
         else if (r.status !== "in" && r.status !== "lobby") { ended(r.status); return; }
       }
       if (r.max) MAX = r.max;
+      // The seventh person joined: the meeting moves to the media server, for everyone, for good.
+      if (r.status === "in" && r.mode === "sfu" && mode === "mesh") await switchToSfu();
       if (r.status === "lobby" && !!r.full !== meeting.full) { meeting.full = !!r.full; renderLobby(); }
       if (r.status === "in") {
         for (const s of r.signals) { lastSignal = Math.max(lastSignal, s.id); onSignal(s); lastActivity = Date.now(); }
@@ -384,7 +679,7 @@
       if (!person.conn?.dc || person.conn.dc.readyState !== "open") person.state = p.state || {};
       if (fresh && startedAt && Date.now() - startedAt > 3000) toast(`${p.name} joined.`);
       // The newer of two people offers the connection.
-      if (me.id > person.id && !person.conn) connectTo(person);
+      if (mode === "mesh" && me.id > person.id && !person.conn) connectTo(person);
     }
     for (const [id, person] of people) {
       if (!here.has(id)) {
@@ -408,7 +703,8 @@
   function pollLoop() {
     if (me.status === "out") return;
     // Quick while connections are being made; every two seconds once everyone's connected.
-    const settling = [...people.values()].some((p) => !p.conn || p.conn.pc.connectionState !== "connected") || Date.now() - lastActivity < 6000 || lobby.length;
+    const settling = (mode === "sfu" ? sfu.state !== "connected" : [...people.values()].some((p) => !p.conn || p.conn.pc.connectionState !== "connected"))
+      || Date.now() - lastActivity < 6000 || lobby.length;
     const delay = me.status === "lobby" ? 2000 : settling ? 700 : 2000;
     setTimeout(async () => { await poll(); pollLoop(); }, document.visibilityState === "hidden" ? Math.max(delay, 1500) : delay);
   }
@@ -603,7 +899,7 @@
   function openPanel(which) { panel = panel === which ? null : which; if (panel === "chat") unreadChat = 0; render(); if (panel === "chat") setTimeout(() => document.querySelector(".mt-chat-input")?.focus()); }
   function sendChat(text) {
     text = text.trim(); if (!text) return;
-    for (const p of people.values()) p.conn?.say({ t: "chat", text });
+    sendAll({ t: "chat", text });
     chat.push({ from: "You", text, at: Date.now(), mine: true });
     render();
   }
@@ -620,6 +916,7 @@
     ended("left");
   }
   function teardown() {
+    sfuClose();
     for (const p of people.values()) p.conn?.close();
     people.clear();
     for (const t of [local.mic, local.cam, local.screen]) t?.stop();
@@ -692,6 +989,7 @@
       secret = r.secret; me.id = r.id; me.status = r.status; me.host = !!r.host;
       iceServers = r.ice_servers || [];
       if (local.mic) watchVoice(me.id, new MediaStream([local.mic]));
+      mode = r.mode === "sfu" ? "sfu" : "mesh";
       if (r.status === "lobby") renderLobby(); else await admitted();
       pollLoop();
     } catch (err) {
@@ -703,6 +1001,7 @@
     startedAt = Date.now();
     lastActivity = Date.now();
     render();
+    if (mode === "sfu") await sfuStart();
     shareState();
     await poll();
   }
@@ -733,7 +1032,8 @@
     return v;
   }
   function tile(id, name, stream, state, opts = {}) {
-    const hasVideo = !!state.v && stream.getVideoTracks().some((t) => t.readyState === "live" && !t.muted);
+    const hasVideo = !!state.v && stream.getVideoTracks().some((t) => t.readyState === "live" && !t.muted && t.enabled)
+      && (!opts.conn?.sfu || decrypted.get(opts.conn.videoPipe) > 0); // through the media server: only what's been decrypted
     const v = videoFor(id, stream, !!opts.self);
     const conn = opts.conn;
     const status = conn && conn.pc.connectionState !== "connected" ? (conn.pc.connectionState === "failed" || conn.pc.connectionState === "disconnected" ? "Reconnecting…" : "Connecting…") : "";
@@ -753,7 +1053,7 @@
     if (me.status !== "in") return;
     const others = [...people.values()].filter((p) => p.name);
     const key = JSON.stringify([others.map((p) => [p.id, p.name, p.member, p.host, p.state, p.conn?.pc.connectionState, p.conn?.stream.getTracks().map((t) => [t.id, t.muted, t.readyState])]),
-      lobby.map((g) => g.id), panel, chat.length, unreadChat, myState(), local.mic?.id, sendingVideo()?.id, pinned, meeting.locked, meeting.full, MAX, me.host, me.name]);
+      lobby.map((g) => g.id), panel, chat.length, unreadChat, myState(), local.mic?.id, sendingVideo()?.id, pinned, meeting.locked, meeting.full, MAX, me.host, me.name, mode, sfu.blocked]);
     if (!force && key === lastKey) return;
     lastKey = key;
     const focused = document.activeElement?.classList.contains("mt-chat-input") ? document.activeElement : null;
@@ -761,11 +1061,12 @@
     const all = [{ id: me.id, name: me.name || "You", stream: local.stream, state: myState(), self: true }, ...others.map((p) => ({ id: p.id, name: p.name, stream: p.conn?.stream || new MediaStream(), state: p.state || {}, conn: p.conn }))];
     // Someone sharing their screen (or a tile double-clicked) takes the stage; everyone else in a strip beside it.
     const presenter = all.find((x) => x.id === pinned) || all.find((x) => x.state.s && !x.self) || all.find((x) => x.state.s);
+    sfuLayers(presenter && !presenter.self ? presenter.id : 0);
     const tiles = all.map((x) => tile(x.id, x.name, x.stream, x.state, { self: x.self, conn: x.conn }));
     const n = all.length;
     const stage = presenter
       ? h("div", { class: "mt-stage spotlight" }, h("div", { class: "mt-main" }, tiles[all.indexOf(presenter)]), h("div", { class: "mt-strip" }, tiles.filter((_, i) => all[i] !== presenter)))
-      : h("div", { class: `mt-stage grid n${n}` }, tiles);
+      : h("div", { class: `mt-stage grid n${n}${n > 6 ? " large" : ""}` }, tiles);
     const recordingBy = all.filter((x) => x.state.r).map((x) => (x.self ? "You are" : `${x.name} is`));
     const ctl = (on, ic, offIc, label, run, extra = "") => h("button", { class: `mt-round${on ? "" : " off"}${extra}`, title: label, "aria-label": label, onclick: run }, icon(on ? ic : offIc));
     const toggle = (pressed, ic, label, run, badge) => h("button", { class: `mt-round${pressed ? " on" : ""}`, title: label, "aria-label": label, "aria-pressed": String(pressed), onclick: run }, icon(ic),
@@ -784,6 +1085,7 @@
         toggle(panel === "people", "people", "People", () => openPanel("people"), (lobby.length ? `${lobby.length}!` : null) || String(n)),
         toggle(panel === "chat", "chat", "Chat", () => openPanel("chat"), unreadChat || null)));
     $root.replaceChildren(h("div", { class: `mt-room${panel ? " with-panel" : ""}` },
+      mode === "sfu" && sfu.blocked ? h("div", { class: "mt-recording", role: "alert" }, "This browser can't encrypt this meeting's sound and video end to end, so your camera and microphone aren't being sent (nothing goes out unencrypted). Join from a recent Chrome or Edge, or update this browser.") : null,
       recordingBy.length ? h("div", { class: "mt-recording", role: "status" }, h("span", { class: "mt-dot" }), `${recordingBy.join(", ")} recording this meeting.`) : null,
       lobby.length && panel !== "people" ? h("div", { class: "mt-knock", role: "status" }, `${lobby.map((g) => g.name).join(", ")} ${lobby.length > 1 ? "want" : "wants"} to join`,
         meeting.full ? `, but the meeting is full (${MAX} people). Someone has to leave first.` : ".",
@@ -852,6 +1154,6 @@
     return;
   }
   $root.replaceChildren(h("main", { class: "mt-card" }, h("div", { class: "mt-spinner", "aria-hidden": "true" }), h("p", {}, "Getting your camera and microphone ready…"), h("p", { class: "muted small" }, "Your browser may ask whether this page can use them.")));
-  window.Meet = { people, me, local, state: () => ({ status: me.status, id: me.id, people: [...people.values()].map((p) => ({ id: p.id, name: p.name, state: p.state, connection: p.conn?.pc.connectionState, tracks: p.conn?.stream.getTracks().map((t) => `${t.kind}:${t.readyState}:${t.muted ? "muted" : "live"}`) })), lobby }) };
+  window.Meet = { people, me, local, state: () => ({ status: me.status, id: me.id, mode, sfu: { state: sfu.state, e2ee: sfu.e2ee, consumers: sfu.consumers.size }, people: [...people.values()].map((p) => ({ id: p.id, name: p.name, state: p.state, connection: p.conn?.pc.connectionState, tracks: p.conn?.stream.getTracks().map((t) => `${t.kind}:${t.readyState}:${t.muted ? "muted" : "live"}`) })), lobby }) };
   prejoin();
 })();

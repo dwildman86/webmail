@@ -31,10 +31,12 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $appName = (string) Config::load()->get('app_name', 'Webmail');
 $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
 
-$page = function (string $title, string $body, int $status = 200, array $data = []) use ($e, $appName): never {
+// The media server for meetings of more than 6 (when GhostParse allows them): the page may connect to it.
+$sfuOrigin = '';
+$page = function (string $title, string $body, int $status = 200, array $data = []) use ($e, $appName, &$sfuOrigin): never {
     http_response_code($status);
     header('Content-Type: text/html; charset=utf-8');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'$sfuOrigin; worker-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'");
     $v = App::VERSION;
     $attrs = '';
     foreach ($data as $k => $val) {
@@ -54,7 +56,7 @@ try {
     Schema::upgrade($app->db);
     $meet = new Meet($app);
     $secret = (string) ($_SERVER['HTTP_X_MEET_PEER'] ?? '');
-    $peerAction = in_array($action, ['poll', 'signal', 'state', 'admit', 'remove', 'lock', 'leave'], true);
+    $peerAction = in_array($action, ['poll', 'signal', 'state', 'admit', 'remove', 'lock', 'leave', 'sfu'], true);
     // The firewall looks at the page and at joining. Everything after is asked every second or two by someone already
     // in (their 256-bit key in X-Meet-Peer), which the firewall's request counting would otherwise take for an attack.
     if (!$peerAction) {
@@ -74,6 +76,10 @@ try {
         }
         $room = $meet->room($token);
         $info = $meet->describe($room, $user);
+        $sfu = $meet->effective()['policy']['sfu'] ?? null;
+        if ($sfu) {
+            $sfuOrigin = ' ' . $sfu; // validated when it came from GhostParse: wss://host:port
+        }
         $page($room['title'], '<noscript><main class="meet-card"><h1>' . $e($room['title']) . '</h1><p>Meetings need JavaScript turned on.</p></main></noscript><div id="meet"></div>', 200, [
             'room' => $token, 'title' => $room['title'], 'app' => $appName, 'max' => $info['max'], 'guests' => $info['guests'] ? '1' : '0', 'recording' => $info['recording'] ? '1' : '0', 'host' => $info['host'] ? '1' : '0',
             'member' => $user ? ($user['name'] !== '' ? $user['name'] : $user['email']) : '', 'csrf' => $user ? Auth::csrfToken() : '', 'webmail' => $base . '/',
@@ -122,6 +128,8 @@ try {
         case 'lock':
             $meet->lock($room, $peer, $peerUser, !empty($in['locked']));
             Http::json(['ok' => true]);
+        case 'sfu':
+            Http::json($meet->sfuJoin($room, $peer));
         case 'leave':
             $meet->leave($peer);
             Http::json(['ok' => true]);

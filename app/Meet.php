@@ -14,12 +14,18 @@ namespace Webmail;
  * A meeting is a link (meet.php?r=…, a 128-bit random token; only its hash is looked up). People signed in to this
  * webmail join straight away; anyone else with the link (a customer) gives their name and waits in the lobby until
  * someone in the meeting lets them in, unless an administrator turned guests off (Settings → Meetings).
- * Up to MAX_PEOPLE at once: in a mesh each person sends their video to every other, which home connections manage
- * up to about six. Bigger meetings need a media server (an SFU), which a shared host can't run.
+ * Up to MAX_PEOPLE at once peer to peer: in a mesh each person sends their video to every other, which home
+ * connections manage up to about six. Organisations GhostParse allows bigger meetings (up to LARGE_MAX) switch a
+ * meeting to GhostParse's media server (an SFU) when a seventh person joins: everyone then sends once, there, and it
+ * forwards. The media server can't see or hear the meeting: browsers encrypt each audio and video frame end to end
+ * with the meeting's own key, made here and given only to the people let into the meeting (never to GhostParse).
  */
 final class Meet
 {
+    /** Peer to peer, everyone to everyone. */
     public const MAX_PEOPLE = 6;
+    /** Through GhostParse's media server. */
+    public const LARGE_MAX = 25;
     /** Not heard from for this long (a closed tab, a lost connection): gone from the meeting. */
     public const GONE_AFTER = 25;
     /** Connection details not fetched within this long are dropped. */
@@ -64,7 +70,7 @@ final class Meet
      */
     public function policy(bool $refresh = false): array
     {
-        $defaults = ['enabled' => true, 'max_people' => self::MAX_PEOPLE, 'guests' => true, 'recording' => true, 'relay' => true];
+        $defaults = ['enabled' => true, 'max_people' => self::MAX_PEOPLE, 'guests' => true, 'recording' => true, 'relay' => true, 'sfu' => null];
         $known = json_decode((string) $this->app->db->value("SELECT v FROM {meta} WHERE k = 'meet_policy'"), true);
         if (!$refresh && is_array($known) && ($known['at'] ?? 0) > $this->now() - 600) {
             return $known['policy'] + $defaults;
@@ -82,8 +88,11 @@ final class Meet
 
     private function rememberPolicy(array $p): array
     {
-        $clean = ['enabled' => (bool) ($p['enabled'] ?? true), 'max_people' => max(2, min(self::MAX_PEOPLE, (int) ($p['max_people'] ?? self::MAX_PEOPLE))),
-            'guests' => (bool) ($p['guests'] ?? true), 'recording' => (bool) ($p['recording'] ?? true), 'relay' => (bool) ($p['relay'] ?? true)];
+        // Beyond MAX_PEOPLE only with the media server's address (a wss:// one; ws:// only on this machine, for development).
+        $sfu = is_string($p['sfu'] ?? null) && preg_match('#^(wss://[a-z0-9.-]+(:\d+)?|ws://(localhost|127\.0\.0\.1)(:\d+)?)$#i', $p['sfu']) ? $p['sfu'] : null;
+        $max = max(2, min($sfu ? self::LARGE_MAX : self::MAX_PEOPLE, (int) ($p['max_people'] ?? self::MAX_PEOPLE)));
+        $clean = ['enabled' => (bool) ($p['enabled'] ?? true), 'max_people' => $max, 'guests' => (bool) ($p['guests'] ?? true),
+            'recording' => (bool) ($p['recording'] ?? true), 'relay' => (bool) ($p['relay'] ?? true), 'sfu' => $max > self::MAX_PEOPLE ? $sfu : null];
         $this->app->db->run("REPLACE INTO {meta} (k, v) VALUES ('meet_policy', ?)", [json_encode(['at' => $this->now(), 'policy' => $clean])]);
         return $clean;
     }
@@ -323,7 +332,8 @@ final class Meet
         if ($status === 'in') {
             $this->joined($roomId, $before ?? 0, false);
         }
-        return ['id' => $id, 'secret' => $secret, 'status' => $status, 'name' => $name, 'member' => $user !== null];
+        $m = $this->modeOf($roomId);
+        return ['mode' => $m['mode'], 'id' => $id, 'secret' => $secret, 'status' => $status, 'name' => $name, 'member' => $user !== null];
     }
 
     /** Counted for the report: someone in, the meeting started when they're the first, and its size. */
@@ -337,6 +347,41 @@ final class Meet
             $this->bump('guests');
         }
         $this->peak($before + 1);
+        // A seventh person (allowed only when GhostParse's media server is): the meeting moves there, for good.
+        if ($before + 1 > self::MAX_PEOPLE) {
+            $this->goLarge($roomId);
+        }
+    }
+
+    /** The meeting moves to the media server, with a new end-to-end key (made here; GhostParse never has it). */
+    private function goLarge(int $roomId): void
+    {
+        $key = sodium_bin2base64(random_bytes(32), SODIUM_BASE64_VARIANT_URLSAFE_NO_PADDING);
+        $this->app->db->run("UPDATE {meet_rooms} SET mode = 'sfu', key_enc = COALESCE(key_enc, ?) WHERE id = ? AND mode = 'mesh'",
+            [$this->app->crypto->encrypt($key, 'meet.key'), $roomId]);
+    }
+
+    /** How the meeting connects now ('mesh' or 'sfu'), and its end-to-end key when on the media server. */
+    private function modeOf(int $roomId): array
+    {
+        $r = $this->app->db->one('SELECT mode, key_enc FROM {meet_rooms} WHERE id = ?', [$roomId]);
+        return ['mode' => $r['mode'] ?? 'mesh', 'key' => ($r['mode'] ?? '') === 'sfu' ? $this->app->crypto->decrypt($r['key_enc'], 'meet.key') : null];
+    }
+
+    /**
+     * Joining the meeting on the media server: a ticket from GhostParse for this person in this meeting (a few minutes),
+     * where to connect, the relay's credentials, and the meeting's key (only for people let in).
+     */
+    public function sfuJoin(array $room, array $peer): array
+    {
+        $this->needIn($peer);
+        $m = $this->modeOf((int) $room['id']);
+        if ($m['mode'] !== 'sfu') {
+            throw new HttpError(409, 'This meeting isn\'t on the media server.', 'not_large');
+        }
+        // GhostParse is told an opaque id for the meeting: never its link.
+        $r = $this->app->gp->request('POST', '/v1/webmail/sfu/join', ['room' => substr(hash('sha256', 'sfu|' . $room['token_hash']), 0, 32), 'peer' => $peer['id']]);
+        return ['url' => (string) ($r['url'] ?? ''), 'token' => (string) ($r['token'] ?? ''), 'ice_servers' => $r['ice_servers'] ?? [], 'key' => $m['key']];
     }
 
     /** The person a secret belongs to, in this meeting. */
@@ -376,8 +421,9 @@ final class Meet
             $db->run('DELETE FROM {meet_signals} WHERE to_peer = ? AND id <= ?', [$peer['id'], $after]);
         }
         $max = $this->max();
+        $m = $this->modeOf($roomId);
         $out = ['status' => $peer['status'], 'me' => $peer['id'], 'title' => $room['title'], 'locked' => (bool) $room['locked'], 'max' => $max,
-            'full' => $this->count($roomId) >= $max, 'people' => [], 'lobby' => [], 'signals' => []];
+            'full' => $this->count($roomId) >= $max, 'mode' => $m['mode'], 'people' => [], 'lobby' => [], 'signals' => []];
         if ($peer['status'] !== 'in') {
             return $out;
         }

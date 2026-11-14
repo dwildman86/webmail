@@ -140,9 +140,15 @@ event puts a meeting link in the event. People with an account here join straigh
 customer, say) gives their name and waits until someone in the meeting lets them in. There's a mute, a camera switch,
 screen sharing, raised hands, chat, and recording.
 
-- **Up to 6 people per meeting.** Everyone connects directly to everyone else (WebRTC), so each person sends their video
-  to each of the others; home and office connections manage that up to about six. Bigger meetings need a media server
-  (an SFU), which shared hosting can't run.
+- **Up to 6 people per meeting peer to peer.** Everyone connects directly to everyone else (WebRTC), so each person
+  sends their video to each of the others; home and office connections manage that up to about six.
+- **Up to 25 with GhostParse's media server**, for organisations GhostParse allows it: when a seventh person joins, the
+  meeting moves there (a moment's pause). Everyone then sends once, to it, and it forwards. It stays encrypted end to
+  end: browsers encrypt every audio and video frame (and chat) with the meeting's own key, made here and given only to
+  the people let in (never to GhostParse), so the media server forwards what it can't see or hear. A browser that can't
+  encrypt its frames sends nothing, and says so. Meetings on the media server are tested in Chrome (and Edge, which
+  shares its engine). Safari and Firefox use the browsers' standard encryption hook, not yet tested with them: if it
+  doesn't take effect there, they send nothing rather than sending it unencrypted.
 - **Private by design.** Sound and video go directly between the people in the meeting, encrypted (DTLS-SRTP). This
   server only introduces their browsers to each other: those connection details are kept encrypted for the seconds it
   takes the other person to fetch them, then deleted. Chat goes directly between the browsers too and isn't kept.

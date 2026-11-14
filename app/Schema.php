@@ -688,6 +688,10 @@ final class Schema
                     FOREIGN KEY (room_id) REFERENCES {meet_rooms}(id) ON DELETE CASCADE
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             ],
+            // Meetings of more than 6: a meeting switches to GhostParse's media server, with its own end-to-end key.
+            16 => [
+                "ALTER TABLE {meet_rooms} ADD COLUMN mode VARCHAR(4) NOT NULL DEFAULT 'mesh', ADD COLUMN key_enc TEXT NULL",
+            ],
         ];
     }
 

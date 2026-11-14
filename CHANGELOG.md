@@ -3,6 +3,11 @@
 Each release's notes, newest first. `build.sh` copies the newest section into `dist/webmail-<version>.txt`, which
 GhostParse shows administrators beside **Update now**.
 
+## 1.28.0
+- **Meetings of up to 25 people**, for organisations GhostParse allows them: when a seventh person joins, the meeting moves to GhostParse's media server by itself (a moment's pause, then everyone's back), and the grid makes room for everyone.
+- **Still encrypted end to end**: each person's browser encrypts their sound and video with the meeting's own key, made by your webmail and given only to the people let in. GhostParse's media server forwards what it can't see or hear, and chat too. A browser that can't encrypt sends nothing rather than sending it unencrypted, and says so.
+- Each person gets the video quality their screen and connection need: full for whoever's presenting, smaller for the tiles.
+
 ## 1.27.0
 - **Full meetings, made clear**: someone asking to join a meeting that already has 6 people is told it's full and can be let in as soon as someone leaves. The people in the meeting see who's waiting and why "Let in" isn't offered yet.
 - **Limits from GhostParse**: GhostParse can set what your organisation's meetings allow (how many people, guests, recording, the relay for strict networks). Any limit shows in **Settings → Meetings**.
